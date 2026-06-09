@@ -44,25 +44,36 @@ export async function POST(request: NextRequest) {
       description: `Created by Kuro AI. Prompt: ${prompt}`,
     });
 
-    const queries = buildPlaylistQueries(prompt, selectedMood);
+    let tracksAdded = 0;
+    let trackWarning = "";
 
-    const uris = await searchSpotifyTrackUris({
-      accessToken,
-      queries,
-      limitPerQuery: 5,
-    });
+    try {
+      const queries = buildPlaylistQueries(prompt, selectedMood);
 
-    await addTracksToSpotifyPlaylist({
-      accessToken,
-      playlistId: playlist.id,
-      uris,
-    });
+      const uris = await searchSpotifyTrackUris({
+        accessToken,
+        queries,
+        limitPerQuery: 5,
+      });
+
+      await addTracksToSpotifyPlaylist({
+        accessToken,
+        playlistId: playlist.id,
+        uris,
+      });
+
+      tracksAdded = uris.length;
+    } catch (trackError) {
+      console.error("Playlist created but failed to add tracks:", trackError);
+      trackWarning = "Playlist was created, but Spotify blocked automatic track adding.";
+    }
 
     return NextResponse.json({
       success: true,
       playlistName: playlist.name,
       playlistUrl: playlist.external_urls.spotify,
-      tracksAdded: uris.length,
+      tracksAdded,
+      warning: trackWarning,
     });
   } catch (error) {
     console.error(error);
