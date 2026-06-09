@@ -21,7 +21,8 @@ app.use(
         return;
       }
 
-      callback(new Error(`CORS blocked origin: ${origin}`));
+      console.error(`CORS blocked origin: ${origin}`);
+      callback(null, false);
     },
     credentials: true,
   }),
@@ -81,10 +82,11 @@ async function findSearchInput(page: Page) {
     page.getByPlaceholder(/search for songs or episodes/i).first(),
     page.getByPlaceholder(/search/i).first(),
     page.locator('input[placeholder*="Search"]').first(),
+    page.locator("input").first(),
   ];
 
   for (const candidate of candidates) {
-    if (await candidate.isVisible().catch(() => false)) {
+    if (await candidate.isVisible({ timeout: 2000 }).catch(() => false)) {
       return candidate;
     }
   }
@@ -101,20 +103,24 @@ async function addTrack(page: Page, seed: string) {
   }
 
   await searchInput.fill("");
+  await page.waitForTimeout(300);
   await searchInput.fill(seed);
-  await page.waitForTimeout(2500);
+  await page.waitForTimeout(3000);
 
   const addButton = page.getByRole("button", { name: /^add$/i }).first();
 
-  if (await addButton.isVisible().catch(() => false)) {
+  if (await addButton.isVisible({ timeout: 2000 }).catch(() => false)) {
     await addButton.click();
     await page.waitForTimeout(1200);
     return true;
   }
 
-  const fallbackButton = page.locator("button").filter({ hasText: /^Add$/i }).first();
+  const fallbackButton = page
+    .locator("button")
+    .filter({ hasText: /^Add$/i })
+    .first();
 
-  if (await fallbackButton.isVisible().catch(() => false)) {
+  if (await fallbackButton.isVisible({ timeout: 2000 }).catch(() => false)) {
     await fallbackButton.click();
     await page.waitForTimeout(1200);
     return true;
@@ -133,31 +139,48 @@ app.get("/", (_req, res) => {
 });
 
 app.post("/spotify/browser-add-tracks", async (req, res) => {
-  const { playlistUrl, playlistName, prompt, selectedMood } = req.body;
-
-  if (!playlistUrl) {
-    return res.status(400).json({
-      success: false,
-      error: "playlistUrl is required.",
-    });
-  }
-
-  const seeds = getSeeds(prompt || "", selectedMood);
-  const userDataDir = path.join(process.cwd(), ".kuro-spotify-browser-profile");
-
-  const context = await chromium.launchPersistentContext(userDataDir, {
-    headless: true,
-    slowMo: 100,
-    viewport: {
-      width: 1440,
-      height: 950,
-    },
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
-  });
-
-  const page = context.pages()[0] || (await context.newPage());
+  let context: Awaited<ReturnType<typeof chromium.launchPersistentContext>> | null =
+    null;
 
   try {
+    const { playlistUrl, playlistName, prompt, selectedMood } = req.body;
+
+    if (!playlistUrl) {
+      return res.status(400).json({
+        success: false,
+        error: "playlistUrl is required.",
+      });
+    }
+
+    console.log("========== KURO SPOTIFY JOB START ==========");
+    console.log({
+      playlistUrl,
+      playlistName,
+      selectedMood,
+      prompt,
+    });
+
+    const seeds = getSeeds(prompt || "", selectedMood);
+    const userDataDir = path.join(process.cwd(), ".kuro-spotify-browser-profile");
+
+    context = await chromium.launchPersistentContext(userDataDir, {
+      headless: true,
+      slowMo: 100,
+      viewport: {
+        width: 1440,
+        height: 950,
+      },
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+        "--disable-software-rasterizer",
+      ],
+    });
+
+    const page = context.pages()[0] || (await context.newPage());
+
     await page.goto(playlistUrl, {
       waitUntil: "domcontentloaded",
       timeout: 60000,
@@ -165,19 +188,39 @@ app.post("/spotify/browser-add-tracks", async (req, res) => {
 
     await page.waitForTimeout(5000);
 
-    if (page.url().includes("login")) {
-      await context.close();
+    const currentUrl = page.url();
+    const title = await page.title().catch(() => "");
 
+    console.log("Spotify page loaded:", {
+      currentUrl,
+      title,
+    });
+
+    const loginVisible = await page
+      .getByRole("button", { name: /log in/i })
+      .first()
+      .isVisible({ timeout: 2000 })
+      .catch(() => false);
+
+    if (
+      currentUrl.includes("login") ||
+      currentUrl.includes("accounts.spotify.com") ||
+      loginVisible
+    ) {
       return res.status(401).json({
         success: false,
         error:
-          "Spotify login is required on the Render browser agent. Run this locally first or set up a persistent logged-in browser profile.",
+          "Spotify login is required inside the Render browser agent. Render cannot use your local browser login automatically.",
+        actionRequired:
+          "For a deployed browser-agent demo, you need a persistent logged-in Spotify session on the Render browser profile, or run the browser agent locally.",
       });
     }
 
     let tracksAdded = 0;
 
     for (const seed of seeds) {
+      console.log(`Searching seed: ${seed}`);
+
       const added = await addTrack(page, seed);
 
       if (added) {
@@ -190,8 +233,6 @@ app.post("/spotify/browser-add-tracks", async (req, res) => {
       }
     }
 
-    await context.close();
-
     return res.json({
       success: true,
       playlistName,
@@ -200,8 +241,7 @@ app.post("/spotify/browser-add-tracks", async (req, res) => {
       message: `Kuro added ${tracksAdded} tracks.`,
     });
   } catch (error) {
-    await context.close();
-
+    console.error("========== KURO BROWSER AGENT ERROR ==========");
     console.error(error);
 
     return res.status(500).json({
@@ -211,24 +251,29 @@ app.post("/spotify/browser-add-tracks", async (req, res) => {
           ? error.message
           : "Browser agent failed.",
     });
+  } finally {
+    if (context) {
+      await context.close().catch(() => null);
+    }
   }
 });
 
 app.use(
   (
-    err: any,
-    req: express.Request,
+    err: unknown,
+    _req: express.Request,
     res: express.Response,
-    next: express.NextFunction,
+    _next: express.NextFunction,
   ) => {
-    console.error("========== KURO ERROR ==========");
+    console.error("========== KURO EXPRESS ERROR ==========");
     console.error(err);
-    console.error(err.stack);
 
     res.status(500).json({
       success: false,
-      error: err?.message || "Unknown server error",
-      stack: err?.stack,
+      error:
+        err instanceof Error
+          ? err.message
+          : "Unknown server error",
     });
   },
 );
