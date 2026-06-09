@@ -1,20 +1,11 @@
-export type OperationType = "flight" | "spotify" | "research" | "calendar" | "general";
-
-export type RecommendationKind = "flight" | "spotify" | "standard";
-
-export type FlightDetails = {
-  route: string;
-  airline: string;
-  departureTime: string;
-  arrivalTime: string;
-  duration: string;
-  stops: string;
-  price: string;
-  baggage: string;
-  cabinBag: string;
-  bookingNote: string;
-  tripUrl: string;
-};
+export type OperationType =
+  | "spotify"
+  | "playlist"
+  | "trip"
+  | "flight"
+  | "research"
+  | "calendar"
+  | "general";
 
 export type SpotifyDetails = {
   mood: string;
@@ -25,19 +16,44 @@ export type SpotifyDetails = {
   tracks: string[];
 };
 
+export type PlaylistDetails = {
+  mood: string;
+  duration: string;
+  source: string;
+  trackSeeds: string[];
+  sources?: string[];
+};
+
+export type FlightDetails = {
+  price: string;
+  route: string;
+  airline: string;
+  departureTime: string;
+  arrivalTime?: string;
+  duration?: string;
+  stops?: string;
+  baggage?: string;
+  cabinBag?: string;
+  bookingNote?: string;
+  tripUrl: string;
+};
+
 export type Recommendation = {
   id: string;
-  kind: RecommendationKind;
+  kind?: string;
   title: string;
-  subtitle: string;
+  subtitle?: string;
   description: string;
-  metadata: string;
-  flightDetails?: FlightDetails;
+  metadata?: string | string[];
+  tag?: string;
+  tracks?: string[];
   spotifyDetails?: SpotifyDetails;
-  sourceUrl?: string;
+  playlistDetails?: PlaylistDetails;
+  flightDetails?: FlightDetails;
 };
 
 export type Operation = {
+  id?: string;
   type: OperationType;
   userPrompt: string;
   recommendations: Recommendation[];

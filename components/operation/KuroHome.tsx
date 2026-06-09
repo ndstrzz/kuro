@@ -19,7 +19,44 @@ import ExecutiveTimeline, {
 } from "@/components/operation/ExecutiveTimeline";
 import AgentNetworkCard from "@/components/cards/AgentNetworkCard";
 import RecommendationGrid from "@/components/recommendations/RecommendationGrid";
-import type { Operation } from "@/types/operation";
+
+type OperationType =
+  | "spotify"
+  | "playlist"
+  | "trip"
+  | "flight"
+  | "research"
+  | "calendar"
+  | "general";
+
+type Recommendation = {
+  id: string;
+  title: string;
+  tag?: string;
+  description: string;
+  tracks?: string[];
+  playlistDetails?: {
+    mood: string;
+    duration: string;
+    source: string;
+    trackSeeds: string[];
+    sources?: string[];
+  };
+  flightDetails?: {
+    price: string;
+    route: string;
+    airline: string;
+    departureTime: string;
+    tripUrl: string;
+  };
+};
+
+type Operation = {
+  id: string;
+  userPrompt: string;
+  type: OperationType;
+  recommendations: Recommendation[];
+};
 
 const suggestions = [
   {
@@ -30,7 +67,7 @@ const suggestions = [
   {
     icon: Music,
     title: "Create Playlist",
-    prompt: "Create a calm Spotify playlist for my seminar",
+    prompt: "Create a trendy K-pop Spotify playlist",
   },
   {
     icon: CalendarDays,
@@ -75,7 +112,23 @@ export default function KuroHome() {
     );
   }, [operation, selectedRecommendationId]);
 
-  const missionTitle = operation?.userPrompt || message || "Waiting for executive request";
+  const operationType = operation?.type;
+  const isSpotifyOperation =
+    operationType === "spotify" || operationType === "playlist";
+  const isTripOperation =
+    operationType === "trip" || operationType === "flight";
+
+  const missionTitle =
+    operation?.userPrompt || message || "Waiting for executive request";
+
+  const actionLabel = useMemo(() => {
+    if (executionComplete) return "Mission complete";
+    if (executing && isSpotifyOperation) return "Creating playlist...";
+    if (executing && isTripOperation) return "Opening Trip.com...";
+    if (isSpotifyOperation) return "Create Playlist";
+    if (isTripOperation) return "Book Flight";
+    return "Approve Mission";
+  }, [executionComplete, executing, isSpotifyOperation, isTripOperation]);
 
   const timelineSteps: TimelineStep[] = useMemo(() => {
     if (!operation) {
@@ -117,7 +170,11 @@ export default function KuroHome() {
       {
         id: "research",
         title: "Research Agent",
-        description: "Exa research and recommendation generation completed.",
+        description: isSpotifyOperation
+          ? "Exa searched broadly across music trends and prepared Spotify-ready tracks."
+          : isTripOperation
+            ? "Flight-only Trip.com planning completed."
+            : "Research plan completed.",
         status: "done",
       },
       {
@@ -144,29 +201,45 @@ export default function KuroHome() {
         description: executionComplete
           ? "Browser handoff completed."
           : executing
-            ? "Chrome is executing the approved task."
+            ? isSpotifyOperation
+              ? "Chrome is creating the Spotify playlist."
+              : "Chrome is executing the approved travel task."
             : "Ready to open the selected external workflow.",
         status: executionComplete ? "done" : executing ? "active" : "waiting",
       },
     ];
-  }, [operation, selectedRecommendation, executing, executionComplete]);
+  }, [
+    operation,
+    selectedRecommendation,
+    executing,
+    executionComplete,
+    isSpotifyOperation,
+    isTripOperation,
+  ]);
 
-  const pushLog = useCallback((agent: OperationLog["agent"], message: string, status: OperationLog["status"] = "running") => {
-    setLogs((current) => [
-      ...current.slice(-14),
-      {
-        id: `${Date.now()}-${Math.random()}`,
-        time: new Date().toLocaleTimeString([], {
-          hour: "2-digit",
-          minute: "2-digit",
-          second: "2-digit",
-        }),
-        agent,
-        message,
-        status,
-      },
-    ]);
-  }, []);
+  const pushLog = useCallback(
+    (
+      agent: OperationLog["agent"],
+      logMessage: string,
+      status: OperationLog["status"] = "running"
+    ) => {
+      setLogs((current) => [
+        ...current.slice(-14),
+        {
+          id: `${Date.now()}-${Math.random()}`,
+          time: new Date().toLocaleTimeString([], {
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+          }),
+          agent,
+          message: logMessage,
+          status,
+        },
+      ]);
+    },
+    []
+  );
 
   function clearScheduledLogs() {
     timeoutRefs.current.forEach((id) => window.clearTimeout(id));
@@ -177,11 +250,11 @@ export default function KuroHome() {
     (
       delay: number,
       agent: OperationLog["agent"],
-      message: string,
+      logMessage: string,
       status: OperationLog["status"] = "running"
     ) => {
       const id = window.setTimeout(() => {
-        pushLog(agent, message, status);
+        pushLog(agent, logMessage, status);
       }, delay);
 
       timeoutRefs.current.push(id);
@@ -222,8 +295,12 @@ export default function KuroHome() {
 
     pushLog("kuro", "Executive request received.", "done");
     scheduleLog(350, "research", "Activating Exa research agent.");
-    scheduleLog(900, "research", "Searching live sources and extracting useful options.");
-    scheduleLog(1450, "planning", "Ranking recommendations by usefulness, speed, and demo safety.");
+    scheduleLog(900, "research", "Searching and extracting useful options.");
+    scheduleLog(
+      1450,
+      "planning",
+      "Ranking recommendations by usefulness, speed, and demo safety."
+    );
 
     const response = await fetch("/api/operations/plan", {
       method: "POST",
@@ -241,11 +318,30 @@ export default function KuroHome() {
       return;
     }
 
-    setOperation(data.operation);
-    setSelectedRecommendationId(data.operation.recommendations[0]?.id ?? null);
+    const nextOperation = data.operation as Operation;
 
-    scheduleLog(300, "research", "Research complete. Recommendation cards prepared.", "done");
-    scheduleLog(700, "planning", "Approval layer is ready. No external action will run without confirmation.", "done");
+    setOperation(nextOperation);
+    setSelectedRecommendationId(nextOperation.recommendations[0]?.id ?? null);
+
+    if (nextOperation.type === "spotify" || nextOperation.type === "playlist") {
+      scheduleLog(
+        300,
+        "research",
+        "Broad music research complete. Spotify-ready track seeds prepared.",
+        "done"
+      );
+    } else if (nextOperation.type === "trip" || nextOperation.type === "flight") {
+      scheduleLog(300, "research", "Flight-only Trip.com planning complete.", "done");
+    } else {
+      scheduleLog(300, "research", "Research plan complete.", "done");
+    }
+
+    scheduleLog(
+      700,
+      "planning",
+      "Approval layer is ready. No external action will run without confirmation.",
+      "done"
+    );
   }
 
   function handleReset() {
@@ -263,7 +359,138 @@ export default function KuroHome() {
   }
 
   async function handleApprove() {
-    const tripUrl = selectedRecommendation?.flightDetails?.tripUrl;
+    if (!operation || !selectedRecommendation) {
+      setExecutionMessage("No recommendation selected.");
+      return;
+    }
+
+    if (isSpotifyOperation) {
+      await executeSpotifyPlaylist();
+      return;
+    }
+
+    if (isTripOperation) {
+      await executeTripFlight();
+      return;
+    }
+
+    setExecutionMessage("This mission is research-only for now.");
+    pushLog("kuro", "Research-only mission prepared. No browser action required.", "done");
+  }
+
+  async function executeSpotifyPlaylist() {
+    if (!operation || !selectedRecommendation) return;
+
+    const trackSeeds =
+      selectedRecommendation.playlistDetails?.trackSeeds ||
+      selectedRecommendation.tracks ||
+      [];
+
+    if (!trackSeeds.length) {
+      setExecutionMessage("No Spotify track seeds found for this playlist.");
+      pushLog("browser", "No Spotify track seeds found for this playlist.", "error");
+      return;
+    }
+
+    clearScheduledLogs();
+
+    setExecuting(true);
+    setExecutionComplete(false);
+    setExecutionMessage("Creating Spotify playlist with browser agent...");
+
+    setBrowserStatus({
+      connected: false,
+      surface: "Spotify",
+      currentAction: "Preparing playlist workflow",
+      target: "localhost:4000",
+      status: "running",
+    });
+
+    pushLog("approval", "Human approval received for Spotify playlist creation.", "done");
+    scheduleLog(350, "browser", "Connecting to local browser agent on localhost:4000.");
+    scheduleLog(850, "browser", "Creating Spotify playlist through authenticated API.");
+    scheduleLog(1400, "browser", "Opening Spotify playlist in persistent Google Chrome.");
+    scheduleLog(2100, "browser", `Searching first Exa track seed: ${trackSeeds[0]}`);
+
+    const statusOne = window.setTimeout(() => {
+      setBrowserStatus({
+        connected: true,
+        surface: "Spotify",
+        currentAction: "Opening playlist and preparing search box",
+        target: selectedRecommendation.title,
+        status: "running",
+      });
+    }, 900);
+
+    const statusTwo = window.setTimeout(() => {
+      setBrowserStatus({
+        connected: true,
+        surface: "Spotify",
+        currentAction: "Searching Exa-researched tracks and pressing Add",
+        target: `${trackSeeds.length} track seeds`,
+        status: "running",
+      });
+    }, 2000);
+
+    timeoutRefs.current.push(statusOne, statusTwo);
+
+    const response = await fetch("/api/spotify/browser-create-playlist", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        prompt: operation.userPrompt,
+        playlistName: selectedRecommendation.title,
+        selectedMood:
+          selectedRecommendation.playlistDetails?.mood ||
+          selectedRecommendation.tag ||
+          "Kuro Playlist",
+        trackSeeds,
+        tracks: trackSeeds,
+        recommendationId: selectedRecommendation.id,
+        recommendationTitle: selectedRecommendation.title,
+      }),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      setExecutionMessage(data.error || "Failed to create Spotify playlist.");
+      setExecuting(false);
+
+      setBrowserStatus({
+        connected: false,
+        surface: "Spotify",
+        currentAction: data.error || "Failed to create Spotify playlist.",
+        target: "Spotify browser workflow",
+        status: "error",
+      });
+
+      pushLog("browser", data.error || "Spotify browser workflow failed.", "error");
+      return;
+    }
+
+    setExecutionMessage(data.message || "Spotify playlist created successfully.");
+    setExecuting(false);
+    setExecutionComplete(true);
+
+    setBrowserStatus({
+      connected: true,
+      surface: "Spotify",
+      currentAction: "Playlist created and tracks added successfully",
+      target: data.playlistUrl || selectedRecommendation.title,
+      status: "done",
+    });
+
+    pushLog("browser", data.message || "Spotify playlist created successfully.", "done");
+    pushLog("kuro", "Playlist mission complete.", "done");
+  }
+
+  async function executeTripFlight() {
+    if (!selectedRecommendation) return;
+
+    const tripUrl = selectedRecommendation.flightDetails?.tripUrl;
 
     if (!tripUrl) {
       setExecutionMessage("No Trip.com URL found for this option.");
@@ -275,7 +502,7 @@ export default function KuroHome() {
 
     setExecuting(true);
     setExecutionComplete(false);
-    setExecutionMessage("Preparing browser handoff...");
+    setExecutionMessage("Preparing Trip.com browser handoff...");
 
     setBrowserStatus({
       connected: false,
@@ -285,13 +512,13 @@ export default function KuroHome() {
       status: "running",
     });
 
-    pushLog("approval", "Human approval received.", "done");
+    pushLog("approval", "Human approval received for Trip.com flight workflow.", "done");
     scheduleLog(350, "browser", "Connecting to local browser agent on localhost:4000.");
     scheduleLog(900, "browser", "Launching persistent Google Chrome profile.");
     scheduleLog(1400, "browser", "Opening the exact selected Trip.com URL.");
-    scheduleLog(2000, "browser", "Kuro will stop before payment or final booking confirmation.", "running");
+    scheduleLog(2000, "browser", "Kuro will stop before payment or final booking confirmation.");
 
-    const browserStatusOne = window.setTimeout(() => {
+    const statusOne = window.setTimeout(() => {
       setBrowserStatus({
         connected: true,
         surface: "Trip.com",
@@ -301,7 +528,7 @@ export default function KuroHome() {
       });
     }, 900);
 
-    const browserStatusTwo = window.setTimeout(() => {
+    const statusTwo = window.setTimeout(() => {
       setBrowserStatus({
         connected: true,
         surface: "Trip.com",
@@ -311,7 +538,7 @@ export default function KuroHome() {
       });
     }, 1900);
 
-    timeoutRefs.current.push(browserStatusOne, browserStatusTwo);
+    timeoutRefs.current.push(statusOne, statusTwo);
 
     const response = await fetch("/api/operations/execute", {
       method: "POST",
@@ -356,7 +583,11 @@ export default function KuroHome() {
     });
 
     pushLog("browser", "Selected Trip.com option opened successfully.", "done");
-    pushLog("kuro", "Mission handoff complete. Awaiting human review before payment.", "done");
+    pushLog(
+      "kuro",
+      "Trip.com mission handoff complete. Awaiting human review before payment.",
+      "done"
+    );
   }
 
   return (
@@ -476,6 +707,32 @@ export default function KuroHome() {
                         {selectedRecommendation.description}
                       </p>
 
+                      {selectedRecommendation.playlistDetails && (
+                        <div className="mt-5 space-y-3">
+                          <Detail label="Mood" value={selectedRecommendation.playlistDetails.mood} />
+                          <Detail label="Duration" value={selectedRecommendation.playlistDetails.duration} />
+                          <Detail label="Source" value={selectedRecommendation.playlistDetails.source} />
+                          <Detail
+                            label="Tracks"
+                            value={`${selectedRecommendation.playlistDetails.trackSeeds.length} seeds`}
+                            strong
+                          />
+
+                          <div className="rounded-2xl bg-white/[0.04] px-4 py-3">
+                            <p className="text-xs text-white/35">Track seeds</p>
+                            <div className="mt-2 space-y-1">
+                              {selectedRecommendation.playlistDetails.trackSeeds
+                                .slice(0, 6)
+                                .map((track: string) => (
+                                  <p key={track} className="text-xs text-white/65">
+                                    • {track}
+                                  </p>
+                                ))}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
                       {selectedRecommendation.flightDetails && (
                         <div className="mt-5 space-y-3">
                           <Detail
@@ -495,13 +752,17 @@ export default function KuroHome() {
                             label="Time"
                             value={selectedRecommendation.flightDetails.departureTime}
                           />
-                          <Detail label="Source" value="Trip.com only" />
+                          <Detail label="Source" value="Trip.com flights only" />
                         </div>
                       )}
 
                       <div className="mt-5 rounded-3xl border border-white/10 bg-white/[0.04] p-4">
                         <p className="text-xs leading-relaxed text-white/45">
-                          Kuro will open Trip.com for this option. It will stop before payment or final booking confirmation.
+                          {isSpotifyOperation
+                            ? "Kuro will create the Spotify playlist, open it in Chrome, search each Exa-researched track, and press Add."
+                            : isTripOperation
+                              ? "Kuro will open Trip.com for this flight option. It will stop before payment or final booking confirmation."
+                              : "Kuro will prepare this mission safely and wait for your next instruction."}
                         </p>
                       </div>
 
@@ -510,12 +771,12 @@ export default function KuroHome() {
                         disabled={executing || executionComplete}
                         className="mt-5 flex w-full items-center justify-center gap-2 rounded-full bg-white px-5 py-3 text-sm font-semibold text-black transition hover:scale-[1.01] disabled:bg-white/20 disabled:text-white/35"
                       >
-                        <ExternalLink className="h-4 w-4" />
-                        {executionComplete
-                          ? "Browser handoff complete"
-                          : executing
-                            ? "Executing with browser agent..."
-                            : "Approve and continue"}
+                        {isSpotifyOperation ? (
+                          <Music className="h-4 w-4" />
+                        ) : (
+                          <ExternalLink className="h-4 w-4" />
+                        )}
+                        {actionLabel}
                       </button>
 
                       {executionMessage && (
