@@ -198,7 +198,8 @@ export async function createSpotifyPlaylist({
     body: JSON.stringify({
       name,
       description,
-      public: false,
+      public: true,
+      collaborative: false,
     }),
   });
 }
@@ -229,7 +230,7 @@ export async function searchSpotifyTrackUris({
     );
 
     for (const track of result.tracks.items) {
-      if (!seen.has(track.uri)) {
+      if (track.uri && track.uri.startsWith("spotify:track:") && !seen.has(track.uri)) {
         seen.add(track.uri);
         uris.push(track.uri);
       }
@@ -237,6 +238,43 @@ export async function searchSpotifyTrackUris({
   }
 
   return uris.slice(0, 50);
+}
+
+async function addTracksWithQueryParams({
+  accessToken,
+  playlistId,
+  uris,
+}: {
+  accessToken: string;
+  playlistId: string;
+  uris: string[];
+}) {
+  const params = new URLSearchParams({
+    uris: uris.join(","),
+  });
+
+  return spotifyFetch(`/playlists/${playlistId}/tracks?${params.toString()}`, accessToken, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+async function addTracksWithBody({
+  accessToken,
+  playlistId,
+  uris,
+}: {
+  accessToken: string;
+  playlistId: string;
+  uris: string[];
+}) {
+  return spotifyFetch(`/playlists/${playlistId}/tracks`, accessToken, {
+    method: "POST",
+    body: JSON.stringify({
+      uris,
+      position: 0,
+    }),
+  });
 }
 
 export async function addTracksToSpotifyPlaylist({
@@ -248,14 +286,27 @@ export async function addTracksToSpotifyPlaylist({
   playlistId: string;
   uris: string[];
 }) {
-  if (uris.length === 0) return;
+  const cleanUris = uris
+    .filter((uri) => uri.startsWith("spotify:track:"))
+    .slice(0, 50);
 
-  await spotifyFetch(`/playlists/${playlistId}/tracks`, accessToken, {
-    method: "POST",
-    body: JSON.stringify({
-      uris,
-    }),
-  });
+  if (cleanUris.length === 0) return;
+
+  try {
+    await addTracksWithQueryParams({
+      accessToken,
+      playlistId,
+      uris: cleanUris,
+    });
+  } catch (queryError) {
+    console.error("Spotify add tracks query-param method failed. Trying body method.", queryError);
+
+    await addTracksWithBody({
+      accessToken,
+      playlistId,
+      uris: cleanUris,
+    });
+  }
 }
 
 export function buildPlaylistQueries(prompt: string, selectedMood?: string) {
