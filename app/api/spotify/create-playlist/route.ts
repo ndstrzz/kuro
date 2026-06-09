@@ -4,7 +4,6 @@ import {
   buildPlaylistQueries,
   createSpotifyPlaylist,
   getSpotifyAccessTokenFromCookies,
-  getSpotifyAuthUrl,
   searchSpotifyTrackUris,
 } from "@/lib/spotify/spotify";
 
@@ -30,12 +29,10 @@ export async function POST(request: NextRequest) {
     const accessToken = await getSpotifyAccessTokenFromCookies();
 
     if (!accessToken) {
-      const { url } = getSpotifyAuthUrl();
-
       return NextResponse.json(
         {
           needsAuth: true,
-          authUrl: url,
+          authUrl: "/api/spotify/login",
         },
         { status: 401 },
       );
@@ -73,9 +70,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       {
         success: false,
-        error: error instanceof Error ? error.message : "Failed to create Spotify playlist.",
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to create Spotify playlist.",
       },
       { status: 500 },
     );
   }
-}//
+}
