@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   addTracksToSpotifyPlaylist,
-  buildPlaylistQueries,
+  buildPlaylistSeeds,
   createSpotifyPlaylist,
   getSpotifyAccessTokenFromCookies,
   searchSpotifyTrackUris,
@@ -44,36 +44,25 @@ export async function POST(request: NextRequest) {
       description: `Created by Kuro AI. Prompt: ${prompt}`,
     });
 
-    let tracksAdded = 0;
-    let trackWarning = "";
+    const seeds = buildPlaylistSeeds(prompt, selectedMood);
 
-    try {
-      const queries = buildPlaylistQueries(prompt, selectedMood);
+    const uris = await searchSpotifyTrackUris({
+      accessToken,
+      seeds,
+    });
 
-      const uris = await searchSpotifyTrackUris({
-        accessToken,
-        queries,
-        limitPerQuery: 5,
-      });
-
-      await addTracksToSpotifyPlaylist({
-        accessToken,
-        playlistId: playlist.id,
-        uris,
-      });
-
-      tracksAdded = uris.length;
-    } catch (trackError) {
-      console.error("Playlist created but failed to add tracks:", trackError);
-      trackWarning = "Playlist was created, but Spotify blocked automatic track adding.";
-    }
+    const tracksAdded = await addTracksToSpotifyPlaylist({
+      accessToken,
+      playlistId: playlist.id,
+      uris,
+    });
 
     return NextResponse.json({
       success: true,
       playlistName: playlist.name,
       playlistUrl: playlist.external_urls.spotify,
       tracksAdded,
-      warning: trackWarning,
+      tracksFound: uris.length,
     });
   } catch (error) {
     console.error(error);

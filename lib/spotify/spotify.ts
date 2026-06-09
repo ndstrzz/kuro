@@ -25,9 +25,6 @@ type SpotifySearchResponse = {
     items: {
       uri: string;
       name: string;
-      artists: {
-        name: string;
-      }[];
     }[];
   };
 };
@@ -94,8 +91,7 @@ export async function exchangeCodeForTokens(code: string) {
   });
 
   if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Spotify token exchange failed: ${text}`);
+    throw new Error(await response.text());
   }
 
   return response.json() as Promise<SpotifyTokenResponse>;
@@ -116,8 +112,7 @@ export async function refreshSpotifyAccessToken(refreshToken: string) {
   });
 
   if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Spotify refresh failed: ${text}`);
+    throw new Error(await response.text());
   }
 
   return response.json() as Promise<SpotifyTokenResponse>;
@@ -129,20 +124,15 @@ export async function getSpotifyAccessTokenFromCookies() {
   const accessToken = cookieStore.get("spotify_access_token")?.value;
   const refreshToken = cookieStore.get("spotify_refresh_token")?.value;
 
-  if (accessToken) {
-    return accessToken;
-  }
-
-  if (!refreshToken) {
-    return null;
-  }
+  if (accessToken) return accessToken;
+  if (!refreshToken) return null;
 
   const refreshed = await refreshSpotifyAccessToken(refreshToken);
 
   cookieStore.set("spotify_access_token", refreshed.access_token, {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure: true,
     maxAge: refreshed.expires_in,
     path: "/",
   });
@@ -174,7 +164,7 @@ export async function spotifyFetch<T>(
       text,
     });
 
-    throw new Error(`Spotify API error: ${text}`);
+    throw new Error(text);
   }
 
   if (response.status === 204) {
@@ -204,139 +194,34 @@ export async function createSpotifyPlaylist({
   });
 }
 
-export async function searchSpotifyTrackUris({
-  accessToken,
-  queries,
-  limitPerQuery = 5,
-}: {
-  accessToken: string;
-  queries: string[];
-  limitPerQuery?: number;
-}) {
-  const uris: string[] = [];
-  const seen = new Set<string>();
-
-  for (const query of queries) {
-    const params = new URLSearchParams({
-      q: query,
-      type: "track",
-      limit: String(limitPerQuery),
-      market: "SG",
-    });
-
-    const result = await spotifyFetch<SpotifySearchResponse>(
-      `/search?${params.toString()}`,
-      accessToken,
-    );
-
-    for (const track of result.tracks.items) {
-      if (track.uri && track.uri.startsWith("spotify:track:") && !seen.has(track.uri)) {
-        seen.add(track.uri);
-        uris.push(track.uri);
-      }
-    }
-  }
-
-  return uris.slice(0, 50);
-}
-
-async function addTracksWithQueryParams({
-  accessToken,
-  playlistId,
-  uris,
-}: {
-  accessToken: string;
-  playlistId: string;
-  uris: string[];
-}) {
-  const params = new URLSearchParams({
-    uris: uris.join(","),
-  });
-
-  return spotifyFetch(`/playlists/${playlistId}/tracks?${params.toString()}`, accessToken, {
-    method: "POST",
-    body: JSON.stringify({}),
-  });
-}
-
-async function addTracksWithBody({
-  accessToken,
-  playlistId,
-  uris,
-}: {
-  accessToken: string;
-  playlistId: string;
-  uris: string[];
-}) {
-  return spotifyFetch(`/playlists/${playlistId}/tracks`, accessToken, {
-    method: "POST",
-    body: JSON.stringify({
-      uris,
-      position: 0,
-    }),
-  });
-}
-
-export async function addTracksToSpotifyPlaylist({
-  accessToken,
-  playlistId,
-  uris,
-}: {
-  accessToken: string;
-  playlistId: string;
-  uris: string[];
-}) {
-  const cleanUris = uris
-    .filter((uri) => uri.startsWith("spotify:track:"))
-    .slice(0, 50);
-
-  if (cleanUris.length === 0) return;
-
-  try {
-    await addTracksWithQueryParams({
-      accessToken,
-      playlistId,
-      uris: cleanUris,
-    });
-  } catch (queryError) {
-    console.error("Spotify add tracks query-param method failed. Trying body method.", queryError);
-
-    await addTracksWithBody({
-      accessToken,
-      playlistId,
-      uris: cleanUris,
-    });
-  }
-}
-
-export function buildPlaylistQueries(prompt: string, selectedMood?: string) {
+export function buildPlaylistSeeds(prompt: string, selectedMood?: string) {
   const lowerPrompt = `${prompt} ${selectedMood || ""}`.toLowerCase();
 
   if (lowerPrompt.includes("seminar") || lowerPrompt.includes("professional")) {
     return [
+      "Ludovico Einaudi Nuvole Bianche",
+      "Nils Frahm Says",
+      "Olafur Arnalds Near Light",
       "soft piano instrumental",
       "coffeehouse jazz instrumental",
       "lofi focus instrumental",
-      "ambient study instrumental",
+      "ambient study music",
       "corporate lounge jazz",
-      "calm background music",
-      "bossa nova instrumental",
+      "bossa nova cafe instrumental",
       "peaceful piano",
-      "deep focus instrumental",
-      "minimal electronic focus",
     ];
   }
 
   if (lowerPrompt.includes("luxury") || lowerPrompt.includes("lounge")) {
     return [
       "luxury lounge jazz",
+      "smooth jazz instrumental",
       "bossa nova cafe",
       "hotel lobby jazz",
-      "smooth jazz instrumental",
-      "chill lounge music",
-      "elegant background music",
       "soft saxophone jazz",
       "modern jazz lounge",
+      "elegant background music",
+      "chill lounge music",
     ];
   }
 
@@ -360,4 +245,72 @@ export function buildPlaylistQueries(prompt: string, selectedMood?: string) {
     "calm instrumental",
     "chill background music",
   ];
+}
+
+export async function searchSpotifyTrackUris({
+  accessToken,
+  seeds,
+}: {
+  accessToken: string;
+  seeds: string[];
+}) {
+  const uris: string[] = [];
+  const seen = new Set<string>();
+
+  for (const seed of seeds) {
+    const params = new URLSearchParams({
+      q: seed,
+      type: "track",
+      limit: "3",
+      market: "SG",
+    });
+
+    try {
+      const result = await spotifyFetch<SpotifySearchResponse>(
+        `/search?${params.toString()}`,
+        accessToken,
+      );
+
+      for (const track of result.tracks.items) {
+        if (track.uri && track.uri.startsWith("spotify:track:") && !seen.has(track.uri)) {
+          seen.add(track.uri);
+          uris.push(track.uri);
+        }
+      }
+    } catch (error) {
+      console.error("Track search failed:", seed, error);
+    }
+  }
+
+  return uris.slice(0, 30);
+}
+
+export async function addTracksToSpotifyPlaylist({
+  accessToken,
+  playlistId,
+  uris,
+}: {
+  accessToken: string;
+  playlistId: string;
+  uris: string[];
+}) {
+  let added = 0;
+
+  for (const uri of uris) {
+    try {
+      await spotifyFetch(`/playlists/${playlistId}/tracks`, accessToken, {
+        method: "POST",
+        body: JSON.stringify({
+          uris: [uri],
+          position: added,
+        }),
+      });
+
+      added += 1;
+    } catch (error) {
+      console.error("Failed to add track:", uri, error);
+    }
+  }
+
+  return added;
 }
