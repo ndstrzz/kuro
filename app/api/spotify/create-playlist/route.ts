@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
-  buildAndInsertTracks,
   createSpotifyPlaylist,
   getSpotifyAccessTokenFromCookies,
 } from "@/lib/spotify/spotify";
@@ -21,9 +20,6 @@ export async function POST(request: NextRequest) {
         ? body.playlistName.trim()
         : "Kuro AI Playlist";
 
-    const selectedMood =
-      typeof body?.selectedMood === "string" ? body.selectedMood : "";
-
     const accessToken = await getSpotifyAccessTokenFromCookies();
 
     if (!accessToken) {
@@ -42,18 +38,11 @@ export async function POST(request: NextRequest) {
       description: `Created by Kuro AI. Prompt: ${prompt}`,
     });
 
-    const tracksAdded = await buildAndInsertTracks({
-      accessToken,
-      playlistId: playlist.id,
-      prompt,
-      selectedMood,
-    });
-
     return NextResponse.json({
       success: true,
       playlistName: playlist.name,
       playlistUrl: playlist.external_urls.spotify,
-      tracksAdded,
+      tracksAdded: 0,
     });
   } catch (error) {
     console.error(error);
