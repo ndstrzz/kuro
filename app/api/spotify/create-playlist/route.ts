@@ -1,10 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
-  addTracksToSpotifyPlaylist,
-  buildPlaylistSeeds,
+  buildAndInsertTracks,
   createSpotifyPlaylist,
   getSpotifyAccessTokenFromCookies,
-  searchSpotifyTrackUris,
 } from "@/lib/spotify/spotify";
 
 export const runtime = "nodejs";
@@ -44,17 +42,11 @@ export async function POST(request: NextRequest) {
       description: `Created by Kuro AI. Prompt: ${prompt}`,
     });
 
-    const seeds = buildPlaylistSeeds(prompt, selectedMood);
-
-    const uris = await searchSpotifyTrackUris({
-      accessToken,
-      seeds,
-    });
-
-    const tracksAdded = await addTracksToSpotifyPlaylist({
+    const tracksAdded = await buildAndInsertTracks({
       accessToken,
       playlistId: playlist.id,
-      uris,
+      prompt,
+      selectedMood,
     });
 
     return NextResponse.json({
@@ -62,7 +54,6 @@ export async function POST(request: NextRequest) {
       playlistName: playlist.name,
       playlistUrl: playlist.external_urls.spotify,
       tracksAdded,
-      tracksFound: uris.length,
     });
   } catch (error) {
     console.error(error);
