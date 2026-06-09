@@ -105,28 +105,19 @@ async function addTrack(page: Page, seed: string) {
   await searchInput.fill("");
   await page.waitForTimeout(300);
   await searchInput.fill(seed);
-  await page.waitForTimeout(3000);
+  await page.waitForTimeout(2500);
 
-  const addButton = page.getByRole("button", { name: /^add$/i }).first();
-
-  if (await addButton.isVisible({ timeout: 2000 }).catch(() => false)) {
-    await addButton.click();
-    await page.waitForTimeout(1200);
-    return true;
-  }
-
-  const fallbackButton = page
-    .locator("button")
-    .filter({ hasText: /^Add$/i })
+  const addButton = page
+    .locator('button[aria-label*="Add"], button:has-text("Add")')
     .first();
 
-  if (await fallbackButton.isVisible({ timeout: 2000 }).catch(() => false)) {
-    await fallbackButton.click();
-    await page.waitForTimeout(1200);
+  if (await addButton.isVisible({ timeout: 3000 }).catch(() => false)) {
+    await addButton.click({ timeout: 3000 });
+    await page.waitForTimeout(1000);
     return true;
   }
 
-  console.log(`Add button not found for seed: ${seed}`);
+  console.log(`No Add button found within timeout for seed: ${seed}`);
   return false;
 }
 
@@ -228,7 +219,7 @@ app.post("/spotify/browser-add-tracks", async (req, res) => {
         console.log(`Added ${tracksAdded}: ${seed}`);
       }
 
-      if (tracksAdded >= 10) {
+      if (tracksAdded >= 5) {
         break;
       }
     }
