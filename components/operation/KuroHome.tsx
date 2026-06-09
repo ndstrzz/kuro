@@ -15,6 +15,9 @@ import KuroMascot from "@/components/mascot/KuroMascot";
 import OperationTimeline from "@/components/timeline/OperationTimeline";
 import AgentNetworkCard from "@/components/cards/AgentNetworkCard";
 import RecommendationGrid from "@/components/recommendations/RecommendationGrid";
+import ExecutiveTimeline, {
+  TimelineStep,
+} from "@/components/operation/ExecutiveTimeline";
 import type { Operation } from "@/types/operation";
 
 const suggestions = [
@@ -52,6 +55,16 @@ type PendingSpotifyTask = {
   selectedMood: string;
 };
 
+type MissionPhase =
+  | "idle"
+  | "planned"
+  | "approving"
+  | "spotify-auth"
+  | "playlist-created"
+  | "browser-agent"
+  | "completed"
+  | "error";
+
 export default function KuroHome() {
   const [message, setMessage] = useState("");
   const [operation, setOperation] = useState<Operation | null>(null);
@@ -60,6 +73,7 @@ export default function KuroHome() {
   const [completed, setCompleted] = useState(false);
   const [executionMessage, setExecutionMessage] = useState("");
   const [spotifyResult, setSpotifyResult] = useState<SpotifyResult | null>(null);
+  const [missionPhase, setMissionPhase] = useState<MissionPhase>("idle");
 
   const selectedRecommendation = useMemo(() => {
     if (!operation) return null;
@@ -71,6 +85,114 @@ export default function KuroHome() {
     );
   }, [operation, selectedRecommendationId]);
 
+  const timelineSteps = useMemo<TimelineStep[]>(() => {
+    if (!operation) {
+      return [];
+    }
+
+    if (operation.type === "spotify") {
+      return [
+        {
+          id: "understand",
+          title: "Understand request",
+          description: "Kuro detected that this is a Spotify playlist mission.",
+          status: "done",
+        },
+        {
+          id: "recommend",
+          title: "Prepare recommendations",
+          description: "Kuro prepared three playlist directions for approval.",
+          status:
+            missionPhase === "planned" || missionPhase === "idle"
+              ? "active"
+              : "done",
+        },
+        {
+          id: "approval",
+          title: "Approval layer",
+          description: "Kuro waits for your confirmation before taking action.",
+          status:
+            missionPhase === "approving" ||
+            missionPhase === "spotify-auth" ||
+            missionPhase === "playlist-created" ||
+            missionPhase === "browser-agent" ||
+            missionPhase === "completed"
+              ? "done"
+              : "waiting",
+        },
+        {
+          id: "spotify",
+          title: "Connect Spotify",
+          description: "Kuro connects to Spotify and verifies permission.",
+          status:
+            missionPhase === "spotify-auth"
+              ? "active"
+              : missionPhase === "playlist-created" ||
+                  missionPhase === "browser-agent" ||
+                  missionPhase === "completed"
+                ? "done"
+                : "waiting",
+        },
+        {
+          id: "create",
+          title: "Create playlist",
+          description: "Kuro creates the Spotify playlist using the approved option.",
+          status:
+            missionPhase === "playlist-created"
+              ? "active"
+              : missionPhase === "browser-agent" ||
+                  missionPhase === "completed"
+                ? "done"
+                : "waiting",
+        },
+        {
+          id: "browser",
+          title: "Launch browser agent",
+          description: "Kuro opens Spotify and adds tracks like a human assistant.",
+          status:
+            missionPhase === "browser-agent"
+              ? "active"
+              : missionPhase === "completed"
+                ? "done"
+                : "waiting",
+        },
+        {
+          id: "complete",
+          title: "Mission completed",
+          description: "Kuro returns the final playlist link and track count.",
+          status: missionPhase === "completed" ? "done" : "waiting",
+        },
+      ];
+    }
+
+    return [
+      {
+        id: "understand",
+        title: "Understand request",
+        description: "Kuro identified the task type and prepared the operation.",
+        status: "done",
+      },
+      {
+        id: "recommend",
+        title: "Prepare recommendations",
+        description: "Kuro generated options for your review.",
+        status: missionPhase === "planned" ? "active" : "done",
+      },
+      {
+        id: "approval",
+        title: "Approval layer",
+        description: "Kuro waits before executing anything externally.",
+        status: executing || completed ? "done" : "waiting",
+      },
+      {
+        id: "execute",
+        title: "Execute operation",
+        description: "Kuro performs the approved workflow.",
+        status: executing ? "active" : completed ? "done" : "waiting",
+      },
+    ];
+  }, [operation, missionPhase, executing, completed]);
+
   useEffect(() => {
     async function continueSpotifyAfterLogin() {
       const params = new URLSearchParams(window.location.search);
@@ -78,11 +200,13 @@ export default function KuroHome() {
 
       if (spotifyStatus !== "connected") {
         if (spotifyStatus === "denied") {
+          setMissionPhase("error");
           setExecutionMessage("Spotify connection was denied.");
           window.history.replaceState({}, "", "/");
         }
 
         if (spotifyStatus === "error" || spotifyStatus === "invalid_state") {
+          setMissionPhase("error");
           setExecutionMessage("Spotify connection failed. Please try again.");
           window.history.replaceState({}, "", "/");
         }
@@ -106,11 +230,13 @@ export default function KuroHome() {
         setExecuting(true);
         setCompleted(false);
         setSpotifyResult(null);
+        setMissionPhase("spotify-auth");
         setExecutionMessage("Spotify connected. Creating playlist now...");
 
         await createPlaylistThenRunBrowserAgent(parsedTask);
       } catch (error) {
         console.error(error);
+        setMissionPhase("error");
         setExecutionMessage("Spotify connected, but playlist creation failed.");
       } finally {
         setExecuting(false);
@@ -124,9 +250,12 @@ export default function KuroHome() {
     const browserAgentUrl = process.env.NEXT_PUBLIC_BROWSER_AGENT_URL;
 
     if (!browserAgentUrl) {
+      setMissionPhase("error");
       setExecutionMessage("Browser agent backend URL is missing.");
       return;
     }
+
+    setMissionPhase("spotify-auth");
 
     const playlistResponse = await fetch("/api/spotify/create-playlist", {
       method: "POST",
@@ -149,7 +278,10 @@ export default function KuroHome() {
       throw new Error(playlistData.error || "Failed to create Spotify playlist.");
     }
 
+    setMissionPhase("playlist-created");
     setExecutionMessage("Playlist created. Starting Kuro browser agent...");
+
+    setMissionPhase("browser-agent");
 
     const browserResponse = await fetch(`${browserAgentUrl}/spotify/browser-add-tracks`, {
       method: "POST",
@@ -176,6 +308,7 @@ export default function KuroHome() {
       tracksAdded: browserData.tracksAdded || 0,
     });
 
+    setMissionPhase("completed");
     setExecutionMessage(browserData.message || "Playlist created successfully.");
     setCompleted(true);
   }
@@ -189,6 +322,7 @@ export default function KuroHome() {
     setCompleted(false);
     setExecutionMessage("");
     setSpotifyResult(null);
+    setMissionPhase("idle");
 
     const response = await fetch("/api/operations/plan", {
       method: "POST",
@@ -201,12 +335,14 @@ export default function KuroHome() {
     const data = await response.json();
 
     if (!response.ok) {
+      setMissionPhase("error");
       setExecutionMessage(data.error || "Failed to create operation.");
       return;
     }
 
     setOperation(data.operation);
     setSelectedRecommendationId(data.operation.recommendations[0]?.id ?? null);
+    setMissionPhase("planned");
   }
 
   function handleReset() {
@@ -217,6 +353,7 @@ export default function KuroHome() {
     setCompleted(false);
     setExecutionMessage("");
     setSpotifyResult(null);
+    setMissionPhase("idle");
     localStorage.removeItem("kuro_pending_spotify_task");
   }
 
@@ -225,6 +362,8 @@ export default function KuroHome() {
       setExecutionMessage("Please select an option first.");
       return;
     }
+
+    setMissionPhase("approving");
 
     if (operation.type === "spotify") {
       await handleSpotifyApprove();
@@ -268,6 +407,7 @@ export default function KuroHome() {
     const data = await response.json();
 
     if (!response.ok) {
+      setMissionPhase("error");
       setExecutionMessage(data.error || "Failed to open Trip.com.");
       setExecuting(false);
       return;
@@ -276,6 +416,7 @@ export default function KuroHome() {
     setExecutionMessage(data.message || "Trip.com opened successfully.");
     setExecuting(false);
     setCompleted(true);
+    setMissionPhase("completed");
   }
 
   async function handleSpotifyApprove() {
@@ -299,6 +440,7 @@ export default function KuroHome() {
       await createPlaylistThenRunBrowserAgent(spotifyTask);
     } catch (error) {
       console.error(error);
+      setMissionPhase("error");
       setExecutionMessage("Could not create the Spotify playlist. Please try again.");
     } finally {
       setExecuting(false);
@@ -392,7 +534,7 @@ export default function KuroHome() {
             </div>
           </>
         ) : (
-          <div className="grid w-full max-w-7xl gap-5 xl:grid-cols-[1fr_360px]">
+          <div className="grid w-full max-w-7xl gap-5 xl:grid-cols-[1fr_380px]">
             <div className="rounded-[2rem] border border-white/10 bg-white/[0.035] p-6 backdrop-blur-xl">
               <div className="flex items-start justify-between gap-4">
                 <KuroMascot status={executing ? "executing" : "thinking"} small />
@@ -543,7 +685,13 @@ export default function KuroHome() {
               />
             </div>
 
-            <AgentNetworkCard />
+            <div className="space-y-5">
+              <ExecutiveTimeline
+                mission={operation.userPrompt}
+                steps={timelineSteps}
+              />
+              <AgentNetworkCard />
+            </div>
           </div>
         )}
 

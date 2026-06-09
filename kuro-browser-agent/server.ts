@@ -121,6 +121,37 @@ async function addTrack(page: Page, seed: string) {
   return false;
 }
 
+async function waitForSpotifyLogin(page: Page) {
+  const loginButton = page.getByRole("button", { name: /log in/i }).first();
+
+  const loginVisible = await loginButton
+    .isVisible({ timeout: 3000 })
+    .catch(() => false);
+
+  const currentUrl = page.url();
+
+  const needsLogin =
+    currentUrl.includes("login") ||
+    currentUrl.includes("accounts.spotify.com") ||
+    loginVisible;
+
+  if (!needsLogin) {
+    console.log("Spotify already logged in.");
+    return;
+  }
+
+  console.log("Spotify login button detected.");
+  console.log("Kuro will give you 40 seconds to log in manually.");
+
+  if (loginVisible) {
+    await loginButton.click({ timeout: 5000 }).catch(() => null);
+  }
+
+  await page.waitForTimeout(40000);
+
+  console.log("40 seconds finished. Kuro will continue now.");
+}
+
 app.get("/", (_req, res) => {
   res.json({
     success: true,
@@ -152,26 +183,38 @@ app.post("/spotify/browser-add-tracks", async (req, res) => {
     });
 
     const seeds = getSeeds(prompt || "", selectedMood);
-    const userDataDir = path.join(process.cwd(), ".kuro-spotify-browser-profile");
+
+    const userDataDir = path.join(process.cwd(), ".kuro-google-chrome-profile");
+
+    console.log("Launching installed Google Chrome...");
+    console.log(`Profile directory: ${userDataDir}`);
 
     context = await chromium.launchPersistentContext(userDataDir, {
-  channel: "chrome",
-  headless: false,
-      slowMo: 100,
+      channel: "chrome",
+      headless: false,
+      slowMo: 120,
       viewport: {
         width: 1440,
         height: 950,
       },
       args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
         "--disable-dev-shm-usage",
         "--disable-gpu",
         "--disable-software-rasterizer",
+        "--start-maximized",
       ],
     });
 
     const page = context.pages()[0] || (await context.newPage());
+
+    await page.goto(playlistUrl, {
+      waitUntil: "domcontentloaded",
+      timeout: 60000,
+    });
+
+    await page.waitForTimeout(5000);
+
+    await waitForSpotifyLogin(page);
 
     await page.goto(playlistUrl, {
       waitUntil: "domcontentloaded",
@@ -187,26 +230,6 @@ app.post("/spotify/browser-add-tracks", async (req, res) => {
       currentUrl,
       title,
     });
-
-    const loginVisible = await page
-      .getByRole("button", { name: /log in/i })
-      .first()
-      .isVisible({ timeout: 2000 })
-      .catch(() => false);
-
-    if (
-      currentUrl.includes("login") ||
-      currentUrl.includes("accounts.spotify.com") ||
-      loginVisible
-    ) {
-      return res.status(401).json({
-        success: false,
-        error:
-          "Spotify login is required inside the Render browser agent. Render cannot use your local browser login automatically.",
-        actionRequired:
-          "For a deployed browser-agent demo, you need a persistent logged-in Spotify session on the Render browser profile, or run the browser agent locally.",
-      });
-    }
 
     let tracksAdded = 0;
 
@@ -224,6 +247,10 @@ app.post("/spotify/browser-add-tracks", async (req, res) => {
         break;
       }
     }
+
+    console.log(`Kuro finished. Tracks added: ${tracksAdded}`);
+
+    await page.waitForTimeout(10000);
 
     return res.json({
       success: true,
@@ -245,6 +272,8 @@ app.post("/spotify/browser-add-tracks", async (req, res) => {
     });
   } finally {
     if (context) {
+      console.log("Keeping Google Chrome open for 30 seconds before closing...");
+      await new Promise((resolve) => setTimeout(resolve, 30000));
       await context.close().catch(() => null);
     }
   }
