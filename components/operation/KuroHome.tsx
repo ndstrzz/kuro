@@ -53,6 +53,7 @@ type PendingSpotifyTask = {
   prompt: string;
   playlistName: string;
   selectedMood: string;
+  trackSeeds?: string[];
 };
 
 type MissionPhase =
@@ -244,7 +245,7 @@ export default function KuroHome() {
     }
 
     continueSpotifyAfterLogin();
-  }, []);
+  }, [selectedRecommendation]); // Added dependency to ensure freshest track details if needed immediately post-redirect
 
   async function createPlaylistThenRunBrowserAgent(spotifyTask: PendingSpotifyTask) {
     const browserAgentUrl = process.env.NEXT_PUBLIC_BROWSER_AGENT_URL;
@@ -293,6 +294,7 @@ export default function KuroHome() {
         playlistName: playlistData.playlistName,
         prompt: spotifyTask.prompt,
         selectedMood: spotifyTask.selectedMood,
+        trackSeeds: spotifyTask.trackSeeds || selectedRecommendation?.spotifyDetails?.tracks || [],
       }),
     });
 
@@ -435,6 +437,7 @@ export default function KuroHome() {
         prompt: operation.userPrompt,
         playlistName: selectedRecommendation.spotifyDetails.playlistName,
         selectedMood: selectedRecommendation.spotifyDetails.mood,
+        trackSeeds: selectedRecommendation.spotifyDetails.tracks || [],
       };
 
       await createPlaylistThenRunBrowserAgent(spotifyTask);

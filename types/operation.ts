@@ -22,6 +22,7 @@ export type SpotifyDetails = {
   estimatedDuration: string;
   source: string;
   playlistName: string;
+  tracks: string[];
 };
 
 export type Recommendation = {

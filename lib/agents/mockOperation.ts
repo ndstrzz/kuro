@@ -45,7 +45,105 @@ function detectOperationType(prompt: string): OperationType {
   return "general";
 }
 
-function getRecommendations(type: OperationType): Recommendation[] {
+const defaultSeminarTracks = [
+  "Ludovico Einaudi Nuvole Bianche",
+  "Yiruma River Flows In You",
+  "Nils Frahm Says",
+  "Ólafur Arnalds Near Light",
+  "Max Richter On The Nature Of Daylight",
+  "Joep Beving Ab Ovo",
+  "Hania Rani Glass",
+  "Dustin O'Halloran Opus 55",
+  "Brian Eno An Ending Ascent",
+  "Tycho A Walk",
+];
+
+const defaultLuxuryTracks = [
+  "Stan Getz The Girl From Ipanema",
+  "João Gilberto Desafinado",
+  "Bill Evans Peace Piece",
+  "Chet Baker Almost Blue",
+  "Miles Davis Blue in Green",
+  "Norah Jones Sunrise",
+  "Sade Smooth Operator",
+  "St Germain Rose Rouge",
+  "Bossa Nova Covers Fly Me To The Moon",
+  "Cafe Music BGM channel Jazz",
+];
+
+const defaultNetworkingTracks = [
+  "HONNE Day 1",
+  "Rex Orange County Loving Is Easy",
+  "Tom Misch Movie",
+  "FKJ Ylang Ylang",
+  "Khruangbin Friday Morning",
+  "Vulfpeck Back Pocket",
+  "Mac Ayres Easy",
+  "Jordan Rakei Mind's Eye",
+  "PREP Who's Got You Singing Again",
+  "Parcels Tieduprightnow",
+];
+
+function getSpotifyRecommendations(exaTracks?: string[]): Recommendation[] {
+  const researchedTracks =
+    exaTracks && exaTracks.length >= 5 ? exaTracks.slice(0, 10) : defaultSeminarTracks;
+
+  return [
+    {
+      id: "spotify-1",
+      kind: "spotify",
+      title: "Seminar Focus",
+      subtitle: "Professional, calm, mostly instrumental",
+      description:
+        "Best for seminars, presentations, workshops, and client-facing sessions where the music should feel polished but not distracting.",
+      metadata: exaTracks && exaTracks.length > 0 ? "Exa researched" : "Recommended",
+      spotifyDetails: {
+        mood: "Professional · Calm · Instrumental",
+        estimatedTracks: "10 curated tracks",
+        estimatedDuration: "35m – 50m",
+        source: "Exa + Spotify Browser Agent",
+        playlistName: "Seminar Focus by Kuro",
+        tracks: researchedTracks,
+      },
+    },
+    {
+      id: "spotify-2",
+      kind: "spotify",
+      title: "Luxury Lounge",
+      subtitle: "Jazz, bossa nova, soft beats",
+      description:
+        "A more premium and elegant playlist for receptions, business lounges, networking areas, or client events.",
+      metadata: "Elegant mood",
+      spotifyDetails: {
+        mood: "Elegant · Lounge · Smooth",
+        estimatedTracks: "10 curated tracks",
+        estimatedDuration: "35m – 50m",
+        source: "Spotify Browser Agent",
+        playlistName: "Luxury Lounge by Kuro",
+        tracks: defaultLuxuryTracks,
+      },
+    },
+    {
+      id: "spotify-3",
+      kind: "spotify",
+      title: "Energetic Networking",
+      subtitle: "Warm, upbeat, welcoming",
+      description:
+        "Best for the start or end of an event when guests are entering, talking, and networking.",
+      metadata: "Light energy",
+      spotifyDetails: {
+        mood: "Warm · Upbeat · Social",
+        estimatedTracks: "10 curated tracks",
+        estimatedDuration: "35m – 50m",
+        source: "Spotify Browser Agent",
+        playlistName: "Energetic Networking by Kuro",
+        tracks: defaultNetworkingTracks,
+      },
+    },
+  ];
+}
+
+function getRecommendations(type: OperationType, exaTracks?: string[]): Recommendation[] {
   if (type === "flight") {
     return [
       {
@@ -115,56 +213,7 @@ function getRecommendations(type: OperationType): Recommendation[] {
   }
 
   if (type === "spotify") {
-    return [
-      {
-        id: "spotify-1",
-        kind: "spotify",
-        title: "Seminar Focus",
-        subtitle: "Professional, calm, mostly instrumental",
-        description:
-          "Best for seminars, presentations, workshops, and client-facing sessions where the music should feel polished but not distracting.",
-        metadata: "Recommended",
-        spotifyDetails: {
-          mood: "Professional · Calm · Instrumental",
-          estimatedTracks: "40–50 tracks",
-          estimatedDuration: "2h 30m – 3h",
-          source: "Spotify",
-          playlistName: "Seminar Focus by Kuro",
-        },
-      },
-      {
-        id: "spotify-2",
-        kind: "spotify",
-        title: "Luxury Lounge",
-        subtitle: "Jazz, bossa nova, soft beats",
-        description:
-          "A more premium and elegant playlist for receptions, business lounges, networking areas, or client events.",
-        metadata: "Elegant mood",
-        spotifyDetails: {
-          mood: "Elegant · Lounge · Smooth",
-          estimatedTracks: "35–45 tracks",
-          estimatedDuration: "2h – 2h 45m",
-          source: "Spotify",
-          playlistName: "Luxury Lounge by Kuro",
-        },
-      },
-      {
-        id: "spotify-3",
-        kind: "spotify",
-        title: "Energetic Networking",
-        subtitle: "Warm, upbeat, welcoming",
-        description:
-          "Best for the start or end of an event when guests are entering, talking, and networking.",
-        metadata: "Light energy",
-        spotifyDetails: {
-          mood: "Warm · Upbeat · Social",
-          estimatedTracks: "35–50 tracks",
-          estimatedDuration: "2h – 3h",
-          source: "Spotify",
-          playlistName: "Energetic Networking by Kuro",
-        },
-      },
-    ];
+    return getSpotifyRecommendations(exaTracks);
   }
 
   return [
@@ -195,12 +244,12 @@ function getRecommendations(type: OperationType): Recommendation[] {
   ];
 }
 
-export function createMockOperation(prompt: string): Operation {
+export function createMockOperation(prompt: string, exaTracks?: string[]): Operation {
   const type = detectOperationType(prompt);
 
   return {
     type,
     userPrompt: prompt,
-    recommendations: getRecommendations(type),
+    recommendations: getRecommendations(type, exaTracks),
   };
 }

@@ -30,7 +30,14 @@ app.use(
 
 app.use(express.json({ limit: "1mb" }));
 
-function getSeeds(prompt: string, selectedMood?: string) {
+function getSeeds(prompt: string, selectedMood?: string, trackSeeds?: string[]) {
+  if (Array.isArray(trackSeeds) && trackSeeds.length > 0) {
+    return trackSeeds
+      .map((track) => track.trim())
+      .filter(Boolean)
+      .slice(0, 12);
+  }
+
   const lowerPrompt = `${prompt} ${selectedMood || ""}`.toLowerCase();
 
   if (lowerPrompt.includes("seminar") || lowerPrompt.includes("professional")) {
@@ -107,12 +114,28 @@ async function addTrack(page: Page, seed: string) {
   await searchInput.fill(seed);
   await page.waitForTimeout(2500);
 
-  const addButton = page
+  const firstSearchResultAddButton = page
+    .locator('[data-testid="tracklist-row"], [role="row"]')
+    .first()
     .locator('button[aria-label*="Add"], button:has-text("Add")')
     .first();
 
-  if (await addButton.isVisible({ timeout: 3000 }).catch(() => false)) {
-    await addButton.click({ timeout: 3000 });
+  if (
+    await firstSearchResultAddButton
+      .isVisible({ timeout: 3000 })
+      .catch(() => false)
+  ) {
+    await firstSearchResultAddButton.click({ timeout: 3000 });
+    await page.waitForTimeout(1000);
+    return true;
+  }
+
+  const fallbackAddButton = page
+    .locator('button[aria-label*="Add"], button:has-text("Add")')
+    .first();
+
+  if (await fallbackAddButton.isVisible({ timeout: 3000 }).catch(() => false)) {
+    await fallbackAddButton.click({ timeout: 3000 });
     await page.waitForTimeout(1000);
     return true;
   }
@@ -165,7 +188,7 @@ app.post("/spotify/browser-add-tracks", async (req, res) => {
     null;
 
   try {
-    const { playlistUrl, playlistName, prompt, selectedMood } = req.body;
+    const { playlistUrl, playlistName, prompt, selectedMood, trackSeeds } = req.body;
 
     if (!playlistUrl) {
       return res.status(400).json({
@@ -180,9 +203,10 @@ app.post("/spotify/browser-add-tracks", async (req, res) => {
       playlistName,
       selectedMood,
       prompt,
+      trackSeeds,
     });
 
-    const seeds = getSeeds(prompt || "", selectedMood);
+    const seeds = getSeeds(prompt || "", selectedMood, trackSeeds);
 
     const userDataDir = path.join(process.cwd(), ".kuro-google-chrome-profile");
 
