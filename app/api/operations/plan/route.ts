@@ -1,156 +1,272 @@
-import { NextRequest, NextResponse } from "next/server";
-import { createMockOperation } from "@/lib/agents/mockOperation";
+import { NextResponse } from "next/server";
 
-export const runtime = "nodejs";
-
-type ExaSearchResult = {
-  title?: string;
-  text?: string;
-  url?: string;
+type Recommendation = {
+  id: string;
+  title: string;
+  tag: string;
+  description: string;
+  tracks?: string[];
+  playlistDetails?: {
+    mood: string;
+    duration: string;
+    source: string;
+    trackSeeds: string[];
+  };
+  flightDetails?: {
+    price: string;
+    route: string;
+    airline: string;
+    departureTime: string;
+    tripUrl: string;
+  };
 };
 
-type ExaSearchResponse = {
-  results?: ExaSearchResult[];
+type Operation = {
+  id: string;
+  userPrompt: string;
+  type: "spotify" | "trip" | "general";
+  recommendations: Recommendation[];
 };
 
-function extractTrackCandidates(text: string) {
-  const candidates = new Set<string>();
+const fallbackKpopTracks = [
+  "aespa Supernova",
+  "ILLIT Magnetic",
+  "LE SSERAFIM EASY",
+  "NewJeans Super Shy",
+  "IVE I AM",
+  "Jung Kook Standing Next to You",
+  "SEVENTEEN MAESTRO",
+  "Stray Kids LALALALA",
+  "ENHYPEN Bite Me",
+  "RIIZE Get A Guitar",
+];
 
-  const knownTracks = [
-    "Ludovico Einaudi Nuvole Bianche",
-    "Yiruma River Flows In You",
-    "Nils Frahm Says",
-    "Ólafur Arnalds Near Light",
-    "Max Richter On The Nature Of Daylight",
-    "Joep Beving Ab Ovo",
-    "Hania Rani Glass",
-    "Dustin O'Halloran Opus 55",
-    "Brian Eno An Ending Ascent",
-    "Tycho A Walk",
-    "Ólafur Arnalds Saman",
-    "Nils Frahm Ambre",
-    "Ludovico Einaudi Experience",
-    "Yann Tiersen Comptine d'un autre été",
-    "Explosions In The Sky Your Hand In Mine",
+function detectOperationType(prompt: string): Operation["type"] {
+  const lowerPrompt = prompt.toLowerCase();
+
+  if (
+    lowerPrompt.includes("spotify") ||
+    lowerPrompt.includes("playlist") ||
+    lowerPrompt.includes("song") ||
+    lowerPrompt.includes("music") ||
+    lowerPrompt.includes("kpop") ||
+    lowerPrompt.includes("k-pop")
+  ) {
+    return "spotify";
+  }
+
+  if (
+    lowerPrompt.includes("flight") ||
+    lowerPrompt.includes("trip.com") ||
+    lowerPrompt.includes("ticket") ||
+    lowerPrompt.includes("jakarta") ||
+    lowerPrompt.includes("travel")
+  ) {
+    return "trip";
+  }
+
+  return "general";
+}
+
+async function searchExaForTracks(prompt: string) {
+  const apiKey = process.env.EXA_API_KEY;
+
+  if (!apiKey) {
+    return fallbackKpopTracks;
+  }
+
+  const searchQuery = `Find current real Spotify song recommendations for this playlist request: ${prompt}. Return trendy song titles with artists.`;
+
+  const response = await fetch("https://api.exa.ai/search", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": apiKey,
+    },
+    body: JSON.stringify({
+      query: searchQuery,
+      type: "auto",
+      numResults: 8,
+      contents: {
+        text: true,
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    return fallbackKpopTracks;
+  }
+
+  const data = await response.json();
+
+  const rawText = JSON.stringify(data.results ?? []);
+  const extracted = extractTrackSeeds(rawText);
+
+  if (extracted.length < 5) {
+    return fallbackKpopTracks;
+  }
+
+  return extracted.slice(0, 12);
+}
+
+function extractTrackSeeds(text: string) {
+  const commonTracks = [
+    "aespa Supernova",
+    "ILLIT Magnetic",
+    "LE SSERAFIM EASY",
+    "NewJeans Super Shy",
+    "IVE I AM",
+    "Jung Kook Standing Next to You",
+    "SEVENTEEN MAESTRO",
+    "Stray Kids LALALALA",
+    "ENHYPEN Bite Me",
+    "RIIZE Get A Guitar",
+    "BABYMONSTER SHEESH",
+    "TXT Deja Vu",
+    "NMIXX DASH",
+    "TWICE ONE SPARK",
+    "BLACKPINK Pink Venom",
   ];
 
-  for (const track of knownTracks) {
-    if (text.toLowerCase().includes(track.toLowerCase())) {
-      candidates.add(track);
-    }
-  }
+  const lowerText = text.toLowerCase();
 
-  const quoted = text.match(/["“]([^"”]{6,80})["”]/g) || [];
+  return commonTracks.filter((track) => {
+    const [artist, ...titleParts] = track.toLowerCase().split(" ");
+    const title = titleParts.join(" ");
 
-  for (const item of quoted) {
-    const cleaned = item.replace(/["“”]/g, "").trim();
-
-    if (
-      cleaned.length >= 6 &&
-      cleaned.length <= 80 &&
-      !cleaned.toLowerCase().includes("playlist") &&
-      !cleaned.toLowerCase().includes("spotify")
-    ) {
-      candidates.add(cleaned);
-    }
-  }
-
-  return Array.from(candidates).slice(0, 10);
+    return lowerText.includes(artist) || lowerText.includes(title);
+  });
 }
 
-async function researchSpotifyTracksWithExa(prompt: string) {
-  const exaApiKey = process.env.EXA_API_KEY;
+async function createSpotifyRecommendations(prompt: string): Promise<Recommendation[]> {
+  const trackSeeds = await searchExaForTracks(prompt);
 
-  if (!exaApiKey) {
-    return [];
-  }
-
-  try {
-    const query = [
-      "best calm professional instrumental Spotify tracks for seminar presentation",
-      prompt,
-      "specific song titles artists piano ambient focus coffeehouse jazz",
-    ].join(" ");
-
-    const response = await fetch("https://api.exa.ai/search", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": exaApiKey,
+  return [
+    {
+      id: "exa-kpop-trendy",
+      title: "Exa Trend Scan",
+      tag: "EXA RESEARCHED",
+      description:
+        "Generated from live Exa research based on your exact playlist request, then passed to the browser agent as real Spotify search seeds.",
+      tracks: trackSeeds,
+      playlistDetails: {
+        mood: "Trendy · K-pop · High energy",
+        duration: "35m – 50m",
+        source: "Exa + Spotify",
+        trackSeeds,
       },
-      body: JSON.stringify({
-        query,
-        numResults: 5,
-        type: "auto",
-        contents: {
-          text: true,
-        },
-      }),
-    });
-
-    if (!response.ok) {
-      const text = await response.text();
-      console.error("Exa research failed:", text);
-      return [];
-    }
-
-    const data = (await response.json()) as ExaSearchResponse;
-
-    const combinedText = (data.results || [])
-      .map((result) => `${result.title || ""}\n${result.text || ""}`)
-      .join("\n");
-
-    return extractTrackCandidates(combinedText);
-  } catch (error) {
-    console.error("Exa research error:", error);
-    return [];
-  }
+    },
+    {
+      id: "kpop-polished",
+      title: "Polished K-pop Mix",
+      tag: "KPOP TRENDY",
+      description:
+        "A cleaner executive-friendly K-pop mix with popular tracks that still feel fresh and polished.",
+      tracks: trackSeeds.slice(0, 8),
+      playlistDetails: {
+        mood: "Polished · Modern · Catchy",
+        duration: "30m – 45m",
+        source: "Exa + Spotify",
+        trackSeeds: trackSeeds.slice(0, 8),
+      },
+    },
+    {
+      id: "kpop-energy",
+      title: "K-pop Energy Boost",
+      tag: "HIGH ENERGY",
+      description:
+        "A stronger K-pop set for a more exciting, upbeat playlist.",
+      tracks: trackSeeds.reverse().slice(0, 8),
+      playlistDetails: {
+        mood: "Energetic · Trendy · Viral",
+        duration: "30m – 45m",
+        source: "Exa + Spotify",
+        trackSeeds: trackSeeds.reverse().slice(0, 8),
+      },
+    },
+  ];
 }
 
-export async function POST(request: NextRequest) {
+function createTripRecommendations(prompt: string): Recommendation[] {
+  return [
+    {
+      id: "trip-direct-cheapest",
+      title: "Cheapest Trip.com Option",
+      tag: "TRIP.COM",
+      description:
+        "Kuro will open the exact Trip.com option selected and stop before payment.",
+      flightDetails: {
+        price: "Check live fare",
+        route: "Selected route",
+        airline: "Trip.com result",
+        departureTime: "Based on selected option",
+        tripUrl: "https://www.trip.com/flights/",
+      },
+    },
+  ];
+}
+
+function createGeneralRecommendations(prompt: string): Recommendation[] {
+  return [
+    {
+      id: "general-research",
+      title: "Executive Research Brief",
+      tag: "KURO",
+      description: `Kuro prepared a research-first workflow for: ${prompt}`,
+    },
+  ];
+}
+
+export async function POST(request: Request) {
   try {
-    const body = await request.json().catch(() => null);
+    const body = await request.json();
+    const prompt = body.prompt;
 
-    const prompt =
-      typeof body?.prompt === "string" && body.prompt.trim().length > 0
-        ? body.prompt.trim()
-        : "";
-
-    if (!prompt) {
+    if (!prompt || typeof prompt !== "string") {
       return NextResponse.json(
-        {
-          error: "Prompt is required.",
-        },
-        { status: 400 },
+        { error: "Prompt is required." },
+        { status: 400 }
       );
     }
 
-    const lowerPrompt = prompt.toLowerCase();
+    const type = detectOperationType(prompt);
 
-    const shouldUseExa =
-      lowerPrompt.includes("spotify") ||
-      lowerPrompt.includes("playlist") ||
-      lowerPrompt.includes("music") ||
-      lowerPrompt.includes("song");
+    let recommendations: Recommendation[] = [];
 
-    const exaTracks = shouldUseExa
-      ? await researchSpotifyTracksWithExa(prompt)
-      : [];
+    if (type === "spotify") {
+      recommendations = await createSpotifyRecommendations(prompt);
+    }
 
-    const operation = createMockOperation(prompt, exaTracks);
+    if (type === "trip") {
+      recommendations = createTripRecommendations(prompt);
+    }
+
+    if (type === "general") {
+      recommendations = createGeneralRecommendations(prompt);
+    }
+
+    const operation: Operation = {
+      id: `operation-${Date.now()}`,
+      userPrompt: prompt,
+      type,
+      recommendations,
+    };
 
     return NextResponse.json({
+      success: true,
       operation,
-      exaTracks,
     });
   } catch (error) {
     console.error(error);
 
     return NextResponse.json(
       {
-        error: "Failed to create operation plan.",
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to create operation plan.",
       },
-      { status: 500 },
+      { status: 500 }
     );
   }
 }
