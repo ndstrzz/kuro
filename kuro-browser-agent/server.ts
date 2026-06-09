@@ -1,7 +1,7 @@
 import express from "express";
 import cors from "cors";
 import path from "path";
-import { chromium, Page } from "playwright";
+import { chromium, Locator, Page } from "playwright";
 
 const app = express();
 const PORT = Number(process.env.PORT || 4000);
@@ -25,50 +25,40 @@ app.use(
       callback(null, false);
     },
     credentials: true,
-  }),
+  })
 );
 
 app.use(express.json({ limit: "1mb" }));
 
 function getSeeds(prompt: string, selectedMood?: string, trackSeeds?: string[]) {
   if (Array.isArray(trackSeeds) && trackSeeds.length > 0) {
-    return trackSeeds
-      .map((track) => track.trim())
-      .filter(Boolean)
-      .slice(0, 12);
+    return Array.from(
+      new Set(
+        trackSeeds
+          .map((track) => String(track).trim())
+          .filter(Boolean)
+      )
+    ).slice(0, 12);
   }
 
   const lowerPrompt = `${prompt} ${selectedMood || ""}`.toLowerCase();
 
-  if (lowerPrompt.includes("seminar") || lowerPrompt.includes("professional")) {
+  if (
+    lowerPrompt.includes("kpop") ||
+    lowerPrompt.includes("k-pop") ||
+    lowerPrompt.includes("korean")
+  ) {
     return [
-      "Ludovico Einaudi Nuvole Bianche",
-      "Yiruma River Flows In You",
-      "Nils Frahm Says",
-      "Ólafur Arnalds Near Light",
-      "Max Richter On The Nature Of Daylight",
-      "soft piano instrumental",
-      "coffeehouse jazz instrumental",
-      "lofi focus instrumental",
-      "ambient study instrumental",
-      "corporate lounge jazz",
-      "bossa nova cafe instrumental",
-      "peaceful piano",
-    ];
-  }
-
-  if (lowerPrompt.includes("luxury") || lowerPrompt.includes("lounge")) {
-    return [
-      "luxury lounge jazz",
-      "bossa nova cafe",
-      "hotel lobby jazz",
-      "smooth jazz instrumental",
-      "chill lounge music",
-      "elegant background music",
-      "soft saxophone jazz",
-      "modern jazz lounge",
-      "cafe jazz instrumental",
-      "dinner jazz instrumental",
+      "aespa Supernova",
+      "ILLIT Magnetic",
+      "NewJeans Super Shy",
+      "LE SSERAFIM EASY",
+      "IVE I AM",
+      "Jung Kook Standing Next to You",
+      "SEVENTEEN MAESTRO",
+      "Stray Kids LALALALA",
+      "RIIZE Get A Guitar",
+      "ENHYPEN Bite Me",
     ];
   }
 
@@ -84,16 +74,23 @@ function getSeeds(prompt: string, selectedMood?: string, trackSeeds?: string[]) 
   ];
 }
 
-async function findSearchInput(page: Page) {
+async function isVisible(locator: Locator, timeout = 1500) {
+  return locator.isVisible({ timeout }).catch(() => false);
+}
+
+async function findPlaylistSearchInput(page: Page) {
   const candidates = [
     page.getByPlaceholder(/search for songs or episodes/i).first(),
-    page.getByPlaceholder(/search/i).first(),
+    page.getByPlaceholder(/find songs/i).first(),
+    page.getByPlaceholder(/let'?s find something/i).first(),
     page.locator('input[placeholder*="Search"]').first(),
-    page.locator("input").first(),
+    page.locator('input[placeholder*="Find"]').first(),
+    page.locator('input').last(),
+    page.locator('input').first(),
   ];
 
   for (const candidate of candidates) {
-    if (await candidate.isVisible({ timeout: 2000 }).catch(() => false)) {
+    if (await isVisible(candidate, 2500)) {
       return candidate;
     }
   }
@@ -101,47 +98,119 @@ async function findSearchInput(page: Page) {
   return null;
 }
 
-async function addTrack(page: Page, seed: string) {
-  const searchInput = await findSearchInput(page);
+async function clearPlaylistSearchInput(page: Page) {
+  const searchInput = await findPlaylistSearchInput(page);
+
+  if (!searchInput) {
+    console.log("Search input not found while clearing.");
+    return false;
+  }
+
+  await searchInput.scrollIntoViewIfNeeded().catch(() => null);
+  await searchInput.click({ timeout: 5000 }).catch(() => null);
+  await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
+  await page.keyboard.press("Backspace");
+  await page.waitForTimeout(700);
+
+  const valueAfterClear = await searchInput.inputValue().catch(() => "");
+
+  if (valueAfterClear) {
+    await searchInput.fill("").catch(() => null);
+    await page.waitForTimeout(400);
+  }
+
+  return true;
+}
+
+async function searchTrackTitle(page: Page, seed: string) {
+  const searchInput = await findPlaylistSearchInput(page);
 
   if (!searchInput) {
     console.log("Search input not found.");
     return false;
   }
 
-  await searchInput.fill("");
-  await page.waitForTimeout(300);
-  await searchInput.fill(seed);
-  await page.waitForTimeout(2500);
+  await searchInput.scrollIntoViewIfNeeded().catch(() => null);
+  await searchInput.click({ timeout: 5000 }).catch(() => null);
 
-  const firstSearchResultAddButton = page
-    .locator('[data-testid="tracklist-row"], [role="row"]')
-    .first()
-    .locator('button[aria-label*="Add"], button:has-text("Add")')
-    .first();
+  await clearPlaylistSearchInput(page);
 
-  if (
-    await firstSearchResultAddButton
-      .isVisible({ timeout: 3000 })
-      .catch(() => false)
-  ) {
-    await firstSearchResultAddButton.click({ timeout: 3000 });
-    await page.waitForTimeout(1000);
-    return true;
+  console.log(`Typing exact Exa song title: ${seed}`);
+  await searchInput.fill(seed, { timeout: 5000 });
+
+  await page.waitForTimeout(2600);
+  return true;
+}
+
+async function clickFirstAddButton(page: Page, seed: string) {
+  const addButtonSelectors = [
+    '[data-testid="tracklist-row"] button[aria-label*="Add"]',
+    '[data-testid="tracklist-row"] button:has-text("Add")',
+    '[role="row"] button[aria-label*="Add"]',
+    '[role="row"] button:has-text("Add")',
+    'button[aria-label*="Add"]',
+    'button:has-text("Add")',
+  ];
+
+  for (const selector of addButtonSelectors) {
+    const buttons = page.locator(selector);
+    const count = await buttons.count().catch(() => 0);
+
+    for (let index = 0; index < Math.min(count, 10); index += 1) {
+      const button = buttons.nth(index);
+
+      if (!(await isVisible(button, 1200))) {
+        continue;
+      }
+
+      const ariaLabel = await button.getAttribute("aria-label").catch(() => "");
+      const text = await button.innerText().catch(() => "");
+      const label = `${ariaLabel || ""} ${text || ""}`.toLowerCase();
+
+      if (
+        label.includes("added") ||
+        label.includes("remove") ||
+        label.includes("more") ||
+        label.includes("close")
+      ) {
+        continue;
+      }
+
+      console.log(`Pressing Add for: ${seed}`);
+
+      await button.scrollIntoViewIfNeeded().catch(() => null);
+      await button.click({ timeout: 5000 });
+      await page.waitForTimeout(1800);
+
+      return true;
+    }
   }
 
-  const fallbackAddButton = page
-    .locator('button[aria-label*="Add"], button:has-text("Add")')
-    .first();
-
-  if (await fallbackAddButton.isVisible({ timeout: 3000 }).catch(() => false)) {
-    await fallbackAddButton.click({ timeout: 3000 });
-    await page.waitForTimeout(1000);
-    return true;
-  }
-
-  console.log(`No Add button found within timeout for seed: ${seed}`);
+  console.log(`No Add button found for: ${seed}`);
   return false;
+}
+
+async function addTrackThenClearSearch(page: Page, seed: string) {
+  console.log("--------------------------------------------");
+  console.log(`Starting new track search: ${seed}`);
+
+  await clearPlaylistSearchInput(page);
+
+  const searched = await searchTrackTitle(page, seed);
+
+  if (!searched) {
+    return false;
+  }
+
+  const added = await clickFirstAddButton(page, seed);
+
+  console.log(`Clearing playlist search input after: ${seed}`);
+  await clearPlaylistSearchInput(page);
+
+  await page.keyboard.press("Escape").catch(() => null);
+  await page.waitForTimeout(1000);
+
+  return added;
 }
 
 async function waitForSpotifyLogin(page: Page) {
@@ -188,7 +257,14 @@ app.post("/spotify/browser-add-tracks", async (req, res) => {
     null;
 
   try {
-    const { playlistUrl, playlistName, prompt, selectedMood, trackSeeds } = req.body;
+    const {
+      playlistUrl,
+      playlistName,
+      prompt,
+      selectedMood,
+      trackSeeds,
+      maxTracks,
+    } = req.body;
 
     if (!playlistUrl) {
       return res.status(400).json({
@@ -204,9 +280,14 @@ app.post("/spotify/browser-add-tracks", async (req, res) => {
       selectedMood,
       prompt,
       trackSeeds,
+      maxTracks,
     });
 
     const seeds = getSeeds(prompt || "", selectedMood, trackSeeds);
+    const targetTrackCount =
+      typeof maxTracks === "number"
+        ? Math.min(maxTracks, seeds.length, 12)
+        : Math.min(seeds.length, 12);
 
     const userDataDir = path.join(process.cwd(), ".kuro-google-chrome-profile");
 
@@ -256,23 +337,35 @@ app.post("/spotify/browser-add-tracks", async (req, res) => {
     });
 
     let tracksAdded = 0;
+    const addedSeeds: string[] = [];
+    const failedSeeds: string[] = [];
 
-    for (const seed of seeds) {
-      console.log(`Searching seed: ${seed}`);
+    for (let index = 0; index < targetTrackCount; index += 1) {
+      const seed = seeds[index];
 
-      const added = await addTrack(page, seed);
+      console.log(`Searching Exa song ${index + 1}/${targetTrackCount}: ${seed}`);
+
+      const added = await addTrackThenClearSearch(page, seed);
 
       if (added) {
         tracksAdded += 1;
-        console.log(`Added ${tracksAdded}: ${seed}`);
+        addedSeeds.push(seed);
+        console.log(`Added successfully: ${seed}`);
+      } else {
+        failedSeeds.push(seed);
+        console.log(`Failed or skipped: ${seed}`);
       }
 
-      if (tracksAdded >= 5) {
-        break;
-      }
+      await page.waitForTimeout(1400);
     }
 
-    console.log(`Kuro finished. Tracks added: ${tracksAdded}`);
+    console.log("========== KURO SPOTIFY JOB COMPLETE ==========");
+    console.log({
+      playlistName,
+      tracksAdded,
+      addedSeeds,
+      failedSeeds,
+    });
 
     await page.waitForTimeout(10000);
 
@@ -281,7 +374,9 @@ app.post("/spotify/browser-add-tracks", async (req, res) => {
       playlistName,
       playlistUrl,
       tracksAdded,
-      message: `Kuro added ${tracksAdded} tracks.`,
+      addedSeeds,
+      failedSeeds,
+      message: `Kuro added ${tracksAdded} tracks to ${playlistName}.`,
     });
   } catch (error) {
     console.error("========== KURO BROWSER AGENT ERROR ==========");
@@ -308,7 +403,7 @@ app.use(
     err: unknown,
     _req: express.Request,
     res: express.Response,
-    _next: express.NextFunction,
+    _next: express.NextFunction
   ) => {
     console.error("========== KURO EXPRESS ERROR ==========");
     console.error(err);
@@ -320,7 +415,7 @@ app.use(
           ? err.message
           : "Unknown server error",
     });
-  },
+  }
 );
 
 app.listen(PORT, "0.0.0.0", () => {

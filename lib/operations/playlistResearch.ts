@@ -105,7 +105,9 @@ function cleanTrackSeed(value: string) {
 function extractTracksFromText(text: string) {
   const candidates = new Set<string>();
 
-  const quotedMatches = text.match(/["“][^"”]{3,80}["”]\s*(?:by|-)\s*[A-Za-z0-9&().,'’\-\s]{2,60}/g) || [];
+  const quotedMatches =
+    text.match(/["“][^"”]{3,80}["”]\s*(?:by|-)\s*[A-Za-z0-9&().,'’\-\s]{2,60}/g) ||
+    [];
 
   for (const match of quotedMatches) {
     const cleaned = cleanTrackSeed(
@@ -120,7 +122,9 @@ function extractTracksFromText(text: string) {
     }
   }
 
-  const dashMatches = text.match(/[A-Za-z0-9&().,'’\-\s]{2,50}\s+-\s+[A-Za-z0-9&().,'’\-\s]{2,50}/g) || [];
+  const dashMatches =
+    text.match(/[A-Za-z0-9&().,'’\-\s]{2,50}\s+-\s+[A-Za-z0-9&().,'’\-\s]{2,50}/g) ||
+    [];
 
   for (const match of dashMatches) {
     const cleaned = cleanTrackSeed(match.replace(/\s+-\s+/i, " "));
@@ -135,7 +139,80 @@ function extractTracksFromText(text: string) {
     }
   }
 
-  return Array.from(candidates).slice(0, 14);
+  return Array.from(candidates).slice(0, 18);
+}
+
+function shuffleTracks(tracks: string[]) {
+  const copy = [...tracks];
+
+  for (let index = copy.length - 1; index > 0; index -= 1) {
+    const randomIndex = Math.floor(Math.random() * (index + 1));
+    [copy[index], copy[randomIndex]] = [copy[randomIndex], copy[index]];
+  }
+
+  return copy;
+}
+
+function extractArtist(track: string) {
+  const parts = track.split(" ");
+
+  if (parts.length <= 2) {
+    return track;
+  }
+
+  return parts.slice(0, 2).join(" ");
+}
+
+function makePlaylistName(theme: string, tracks: string[], variant: number) {
+  const artistOne = extractArtist(tracks[0] || "Kuro");
+  const artistTwo = extractArtist(tracks[1] || "Mix");
+
+  const kpopNames = [
+    `${artistOne} Radio: K-pop Rush`,
+    `${artistOne} x ${artistTwo} Trend Mix`,
+    `Kuro K-pop Signal`,
+    `Seoul Pop Current`,
+    `Idol Energy Queue`,
+    `Viral K-pop Rotation`,
+  ];
+
+  const calmNames = [
+    `${artistOne} Soft Focus`,
+    `Quiet Desk Rotation`,
+    `Kuro Calm Session`,
+    `Soft Light Study Mix`,
+    `Evening Focus Queue`,
+    `${artistOne} Gentle Hours`,
+  ];
+
+  const workoutNames = [
+    `${artistOne} Energy Mode`,
+    `Kuro Hype Circuit`,
+    `High Tempo Rotation`,
+    `Workout Signal Mix`,
+    `${artistOne} Power Queue`,
+    `Momentum Tracks`,
+  ];
+
+  const defaultNames = [
+    `${artistOne} Discovery Mix`,
+    `Kuro Curated Signal`,
+    `${artistOne} x ${artistTwo} Rotation`,
+    `Fresh Track Queue`,
+    `Modern Mix Desk`,
+    `Executive Audio Stack`,
+  ];
+
+  const names =
+    theme === "kpop"
+      ? kpopNames
+      : theme === "calm"
+        ? calmNames
+        : theme === "workout"
+          ? workoutNames
+          : defaultNames;
+
+  return names[variant % names.length];
 }
 
 async function searchExa(prompt: string) {
@@ -148,10 +225,9 @@ async function searchExa(prompt: string) {
   const query = `
 Find current music recommendations for this playlist request: "${prompt}".
 
-Search broadly across music trend sources, not only Spotify.
-Use sources such as Spotify playlists, YouTube Music, Billboard, TikTok music trends, Reddit music discussions, music blogs, and K-pop trend articles where relevant.
+Search broadly across Spotify playlists, YouTube Music, Billboard, TikTok music trends, Reddit music discussions, music blogs, music charts, and K-pop trend articles when relevant.
 
-Return real song titles and artists that would be good Spotify search seeds.
+Return real song titles and artists that can be searched on Spotify.
 `;
 
   const response = await fetch("https://api.exa.ai/search", {
@@ -201,18 +277,18 @@ export async function researchPlaylist(prompt: string): Promise<PlaylistResearch
     console.error("Playlist Exa research failed:", error);
   }
 
-  const trackSeeds = exaTracks.length >= 6 ? exaTracks : fallbackTracks;
+  const baseTracks = exaTracks.length >= 6 ? exaTracks : fallbackTracks;
 
-  const firstSet = trackSeeds.slice(0, 10);
-  const secondSet = [...trackSeeds].slice(2, 12);
-  const thirdSet = [...trackSeeds].reverse().slice(0, 10);
+  const shuffledOne = shuffleTracks(baseTracks).slice(0, 10);
+  const shuffledTwo = shuffleTracks(baseTracks).slice(0, 10);
+  const shuffledThree = shuffleTracks(baseTracks).slice(0, 10);
 
   return [
     {
-      title: theme === "kpop" ? "K-pop Trend Scan" : "Exa Trend Scan",
+      title: makePlaylistName(theme, shuffledOne, 0),
       tag: "EXA RESEARCHED",
       description:
-        "Kuro searched broadly across web music trends, charts, playlists, blogs, and social signals before preparing Spotify search seeds.",
+        "Kuro searched broadly across music trends, charts, playlist sources, blogs, and social signals before preparing this Spotify-ready playlist.",
       mood:
         theme === "kpop"
           ? "Trendy · K-pop · Viral"
@@ -221,31 +297,33 @@ export async function researchPlaylist(prompt: string): Promise<PlaylistResearch
             : theme === "workout"
               ? "Energetic · Hype · Fast"
               : "Curated · Modern · Balanced",
-      trackSeeds: firstSet,
-      sources: sources.length ? sources : ["Broad web music research", "Spotify-ready search seeds"],
+      trackSeeds: shuffledOne,
+      sources: sources.length
+        ? sources
+        : ["Broad web music research", "Spotify-ready search seeds"],
     },
     {
-      title: theme === "kpop" ? "Polished K-pop Mix" : "Polished Executive Mix",
+      title: makePlaylistName(theme, shuffledTwo, 1),
       tag: "REFINED",
       description:
-        "A cleaner version of the researched tracks, designed to feel more polished and less random during the demo.",
+        "A cleaner variation of the researched tracks, designed to feel polished, current, and demo-ready.",
       mood:
         theme === "kpop"
           ? "Clean · Catchy · Modern K-pop"
           : "Clean · Smooth · Professional",
-      trackSeeds: secondSet.length >= 6 ? secondSet : firstSet,
+      trackSeeds: shuffledTwo,
       sources: sources.length ? sources : ["Broad web music research"],
     },
     {
-      title: theme === "kpop" ? "K-pop Energy Boost" : "Energy Boost",
+      title: makePlaylistName(theme, shuffledThree, 2),
       tag: "HIGH ENERGY",
       description:
-        "A stronger option with more energy, useful when the playlist should feel exciting and current.",
+        "A stronger option with more energy, useful when the playlist should feel exciting, fresh, and current.",
       mood:
         theme === "kpop"
           ? "High energy · Trendy · Performance"
           : "Upbeat · Fresh · Momentum",
-      trackSeeds: thirdSet.length >= 6 ? thirdSet : firstSet,
+      trackSeeds: shuffledThree,
       sources: sources.length ? sources : ["Broad web music research"],
     },
   ];
