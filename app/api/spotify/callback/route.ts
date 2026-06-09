@@ -3,6 +3,17 @@ import { exchangeCodeForTokens } from "@/lib/spotify/spotify";
 
 export const runtime = "nodejs";
 
+function getAppUrl(request: NextRequest) {
+  const protocol = request.headers.get("x-forwarded-proto") || "https";
+  const host = request.headers.get("x-forwarded-host") || request.headers.get("host");
+
+  if (!host) {
+    return process.env.NEXT_PUBLIC_APP_URL || "https://kuro-three.vercel.app";
+  }
+
+  return `${protocol}://${host}`;
+}
+
 export async function GET(request: NextRequest) {
   const url = new URL(request.url);
 
@@ -11,7 +22,7 @@ export async function GET(request: NextRequest) {
   const error = url.searchParams.get("error");
 
   const savedState = request.cookies.get("spotify_auth_state")?.value;
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://kuro-three.vercel.app";
+  const appUrl = getAppUrl(request);
 
   if (error) {
     return NextResponse.redirect(`${appUrl}/?spotify=denied`);
