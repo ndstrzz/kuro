@@ -1,61 +1,35 @@
 import { NextRequest, NextResponse } from "next/server";
-import {
-  createSpotifyPlaylist,
-  getSpotifyAccessTokenFromCookies,
-} from "@/lib/spotify/spotify";
-import { createSpotifyPlaylistWithBrowserAgent } from "@/lib/browser/createSpotifyPlaylist";
 
 export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json().catch(() => null);
+    const browserAgentUrl = process.env.NEXT_PUBLIC_BROWSER_AGENT_URL;
 
-    const prompt =
-      typeof body?.prompt === "string" && body.prompt.trim().length > 0
-        ? body.prompt.trim()
-        : "Create a calm Spotify playlist for my seminar";
-
-    const playlistName =
-      typeof body?.playlistName === "string" && body.playlistName.trim().length > 0
-        ? body.playlistName.trim()
-        : "Kuro AI Playlist";
-
-    const selectedMood =
-      typeof body?.selectedMood === "string" ? body.selectedMood : "";
-
-    const accessToken = await getSpotifyAccessTokenFromCookies();
-
-    if (!accessToken) {
+    if (!browserAgentUrl) {
       return NextResponse.json(
         {
-          needsAuth: true,
-          authUrl: "/api/spotify/login",
+          success: false,
+          error: "NEXT_PUBLIC_BROWSER_AGENT_URL is missing.",
         },
-        { status: 401 },
+        { status: 500 },
       );
     }
 
-    const playlist = await createSpotifyPlaylist({
-      accessToken,
-      name: playlistName,
-      description: `Created by Kuro AI Browser Agent. Prompt: ${prompt}`,
+    const body = await request.json();
+
+    const response = await fetch(`${browserAgentUrl}/spotify/browser-add-tracks`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
     });
 
-    const browserResult = await createSpotifyPlaylistWithBrowserAgent({
-      playlistUrl: playlist.external_urls.spotify,
-      playlistName: playlist.name,
-      prompt,
-      selectedMood,
-    });
+    const data = await response.json();
 
-    return NextResponse.json({
-      success: true,
-      playlistName: playlist.name,
-      playlistUrl: playlist.external_urls.spotify,
-      tracksAdded: browserResult.tracksAdded,
-      message: browserResult.message,
+    return NextResponse.json(data, {
+      status: response.status,
     });
   } catch (error) {
     console.error(error);
@@ -66,7 +40,7 @@ export async function POST(request: NextRequest) {
         error:
           error instanceof Error
             ? error.message
-            : "Failed to create Spotify playlist with browser agent.",
+            : "Failed to contact browser agent.",
       },
       { status: 500 },
     );
