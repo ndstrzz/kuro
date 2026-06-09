@@ -1,2 +1,3 @@
-2026/06/10-05:46:08.297 9b3cc Creating DB /Users/nd/Desktop/kuro/kuro-browser-agent/.kuro-spotify-browser-profile/Default/shared_proto_db since it was missing.
-2026/06/10-05:46:08.298 9b3cc Reusing MANIFEST /Users/nd/Desktop/kuro/kuro-browser-agent/.kuro-spotify-browser-profile/Default/shared_proto_db/MANIFEST-000001
+2026/06/10-05:57:17.127 9e62a Reusing MANIFEST /Users/nd/Desktop/kuro/kuro-browser-agent/.kuro-spotify-browser-profile/Default/shared_proto_db/MANIFEST-000001
+2026/06/10-05:57:17.127 9e62a Recovering log #3
+2026/06/10-05:57:17.127 9e62a Reusing old log /Users/nd/Desktop/kuro/kuro-browser-agent/.kuro-spotify-browser-profile/Default/shared_proto_db/000003.log 

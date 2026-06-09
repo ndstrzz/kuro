@@ -155,7 +155,8 @@ app.post("/spotify/browser-add-tracks", async (req, res) => {
     const userDataDir = path.join(process.cwd(), ".kuro-spotify-browser-profile");
 
     context = await chromium.launchPersistentContext(userDataDir, {
-      headless: true,
+  channel: "chrome",
+  headless: false,
       slowMo: 100,
       viewport: {
         width: 1440,
