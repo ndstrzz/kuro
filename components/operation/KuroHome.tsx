@@ -19,44 +19,9 @@ import ExecutiveTimeline, {
 } from "@/components/operation/ExecutiveTimeline";
 import AgentNetworkCard from "@/components/cards/AgentNetworkCard";
 import RecommendationGrid from "@/components/recommendations/RecommendationGrid";
+import type { Operation } from "@/types/operation";
 
-type OperationType =
-  | "spotify"
-  | "playlist"
-  | "trip"
-  | "flight"
-  | "research"
-  | "calendar"
-  | "general";
-
-type Recommendation = {
-  id: string;
-  title: string;
-  tag?: string;
-  description: string;
-  tracks?: string[];
-  playlistDetails?: {
-    mood: string;
-    duration: string;
-    source: string;
-    trackSeeds: string[];
-    sources?: string[];
-  };
-  flightDetails?: {
-    price: string;
-    route: string;
-    airline: string;
-    departureTime: string;
-    tripUrl: string;
-  };
-};
-
-type Operation = {
-  id: string;
-  userPrompt: string;
-  type: OperationType;
-  recommendations: Recommendation[];
-};
+const LOCAL_BROWSER_AGENT_URL = "http://localhost:4000";
 
 const suggestions = [
   {
@@ -115,8 +80,7 @@ export default function KuroHome() {
   const operationType = operation?.type;
   const isSpotifyOperation =
     operationType === "spotify" || operationType === "playlist";
-  const isTripOperation =
-    operationType === "trip" || operationType === "flight";
+  const isTripOperation = operationType === "trip" || operationType === "flight";
 
   const missionTitle =
     operation?.userPrompt || message || "Waiting for executive request";
@@ -384,6 +348,7 @@ export default function KuroHome() {
     const trackSeeds =
       selectedRecommendation.playlistDetails?.trackSeeds ||
       selectedRecommendation.tracks ||
+      selectedRecommendation.spotifyDetails?.tracks ||
       [];
 
     if (!trackSeeds.length) {
@@ -396,95 +361,170 @@ export default function KuroHome() {
 
     setExecuting(true);
     setExecutionComplete(false);
-    setExecutionMessage("Creating Spotify playlist with browser agent...");
+    setExecutionMessage("Creating Spotify playlist...");
 
     setBrowserStatus({
       connected: false,
       surface: "Spotify",
-      currentAction: "Preparing playlist workflow",
-      target: "localhost:4000",
+      currentAction: "Creating playlist with Spotify OAuth",
+      target: "Vercel Spotify API",
       status: "running",
     });
 
     pushLog("approval", "Human approval received for Spotify playlist creation.", "done");
-    scheduleLog(350, "browser", "Connecting to local browser agent on localhost:4000.");
-    scheduleLog(850, "browser", "Creating Spotify playlist through authenticated API.");
-    scheduleLog(1400, "browser", "Opening Spotify playlist in persistent Google Chrome.");
-    scheduleLog(2100, "browser", `Searching first Exa track seed: ${trackSeeds[0]}`);
+    scheduleLog(350, "browser", "Creating Spotify playlist through the Spotify API.");
+    scheduleLog(900, "browser", "Preparing direct browser-to-localhost agent handoff.");
+    scheduleLog(1400, "browser", `Local target: ${LOCAL_BROWSER_AGENT_URL}`);
+    scheduleLog(2100, "browser", `First Exa track seed: ${trackSeeds[0]}`);
 
-    const statusOne = window.setTimeout(() => {
+    try {
+      const playlistResponse = await fetch("/api/spotify/create-playlist", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          prompt: operation.userPrompt,
+          playlistName: selectedRecommendation.title,
+          selectedMood:
+            selectedRecommendation.playlistDetails?.mood ||
+            selectedRecommendation.spotifyDetails?.mood ||
+            selectedRecommendation.tag ||
+            selectedRecommendation.kind ||
+            "Kuro Playlist",
+          trackSeeds,
+          tracks: trackSeeds,
+          recommendationId: selectedRecommendation.id,
+          recommendationTitle: selectedRecommendation.title,
+        }),
+      });
+
+      const playlistData = await playlistResponse.json();
+
+      if (!playlistResponse.ok) {
+        const loginUrl =
+          playlistData.loginUrl ||
+          playlistData.authUrl ||
+          "/api/spotify/login";
+
+        if (
+          playlistResponse.status === 401 ||
+          playlistData.needsAuth ||
+          playlistData.requiresAuth
+        ) {
+          setExecutionMessage("Spotify login required. Redirecting...");
+          window.location.href = loginUrl;
+          return;
+        }
+
+        throw new Error(
+          playlistData.error || "Failed to create Spotify playlist."
+        );
+      }
+
+      const playlistUrl =
+        playlistData.playlistUrl ||
+        playlistData.url ||
+        playlistData.externalUrl ||
+        playlistData.playlist?.external_urls?.spotify ||
+        playlistData.playlist?.url ||
+        playlistData.data?.playlistUrl;
+
+      if (!playlistUrl || typeof playlistUrl !== "string") {
+        throw new Error("Spotify playlist was created, but no playlist URL was returned.");
+      }
+
+      setExecutionMessage("Playlist created. Sending task to local browser agent...");
+
       setBrowserStatus({
         connected: true,
         surface: "Spotify",
-        currentAction: "Opening playlist and preparing search box",
-        target: selectedRecommendation.title,
+        currentAction: "Calling local browser agent directly from your browser",
+        target: LOCAL_BROWSER_AGENT_URL,
         status: "running",
       });
-    }, 900);
 
-    const statusTwo = window.setTimeout(() => {
+      const statusOne = window.setTimeout(() => {
+        setBrowserStatus({
+          connected: true,
+          surface: "Spotify",
+          currentAction: "Opening playlist in persistent Chrome",
+          target: playlistUrl,
+          status: "running",
+        });
+      }, 900);
+
+      const statusTwo = window.setTimeout(() => {
+        setBrowserStatus({
+          connected: true,
+          surface: "Spotify",
+          currentAction: "Searching Exa-researched tracks and pressing Add",
+          target: `${trackSeeds.length} track seeds`,
+          status: "running",
+        });
+      }, 2000);
+
+      timeoutRefs.current.push(statusOne, statusTwo);
+
+      const agentResponse = await fetch(
+        `${LOCAL_BROWSER_AGENT_URL}/spotify/browser-add-tracks`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            playlistUrl,
+            playlistName: selectedRecommendation.title,
+            prompt: operation.userPrompt,
+            selectedMood:
+              selectedRecommendation.playlistDetails?.mood ||
+              selectedRecommendation.spotifyDetails?.mood ||
+              selectedRecommendation.tag ||
+              selectedRecommendation.kind ||
+              "Kuro Playlist",
+            trackSeeds,
+          }),
+        }
+      );
+
+      const agentData = await agentResponse.json();
+
+      if (!agentResponse.ok) {
+        throw new Error(agentData.error || "Local browser agent failed.");
+      }
+
+      setExecutionMessage(agentData.message || "Spotify playlist created successfully.");
+      setExecuting(false);
+      setExecutionComplete(true);
+
       setBrowserStatus({
         connected: true,
         surface: "Spotify",
-        currentAction: "Searching Exa-researched tracks and pressing Add",
-        target: `${trackSeeds.length} track seeds`,
-        status: "running",
+        currentAction: "Playlist created and tracks added successfully",
+        target: playlistUrl,
+        status: "done",
       });
-    }, 2000);
 
-    timeoutRefs.current.push(statusOne, statusTwo);
+      pushLog("browser", agentData.message || "Spotify playlist created successfully.", "done");
+      pushLog("kuro", "Playlist mission complete.", "done");
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Failed to create Spotify playlist.";
 
-    const response = await fetch("/api/spotify/browser-create-playlist", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        prompt: operation.userPrompt,
-        playlistName: selectedRecommendation.title,
-        selectedMood:
-          selectedRecommendation.playlistDetails?.mood ||
-          selectedRecommendation.tag ||
-          "Kuro Playlist",
-        trackSeeds,
-        tracks: trackSeeds,
-        recommendationId: selectedRecommendation.id,
-        recommendationTitle: selectedRecommendation.title,
-      }),
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      setExecutionMessage(data.error || "Failed to create Spotify playlist.");
+      setExecutionMessage(message);
       setExecuting(false);
 
       setBrowserStatus({
         connected: false,
         surface: "Spotify",
-        currentAction: data.error || "Failed to create Spotify playlist.",
-        target: "Spotify browser workflow",
+        currentAction: message,
+        target: LOCAL_BROWSER_AGENT_URL,
         status: "error",
       });
 
-      pushLog("browser", data.error || "Spotify browser workflow failed.", "error");
-      return;
+      pushLog("browser", message, "error");
     }
-
-    setExecutionMessage(data.message || "Spotify playlist created successfully.");
-    setExecuting(false);
-    setExecutionComplete(true);
-
-    setBrowserStatus({
-      connected: true,
-      surface: "Spotify",
-      currentAction: "Playlist created and tracks added successfully",
-      target: data.playlistUrl || selectedRecommendation.title,
-      status: "done",
-    });
-
-    pushLog("browser", data.message || "Spotify playlist created successfully.", "done");
-    pushLog("kuro", "Playlist mission complete.", "done");
   }
 
   async function executeTripFlight() {
@@ -759,7 +799,7 @@ export default function KuroHome() {
                       <div className="mt-5 rounded-3xl border border-white/10 bg-white/[0.04] p-4">
                         <p className="text-xs leading-relaxed text-white/45">
                           {isSpotifyOperation
-                            ? "Kuro will create the Spotify playlist, open it in Chrome, search each Exa-researched track, and press Add."
+                            ? "Kuro will create the Spotify playlist, then your browser will call localhost:4000 directly to open Chrome, search each Exa-researched track, and press Add."
                             : isTripOperation
                               ? "Kuro will open Trip.com for this flight option. It will stop before payment or final booking confirmation."
                               : "Kuro will prepare this mission safely and wait for your next instruction."}
