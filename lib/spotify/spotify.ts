@@ -12,11 +12,6 @@ export type SpotifyTokenResponse = {
   refresh_token?: string;
 };
 
-type SpotifyProfile = {
-  id: string;
-  display_name?: string;
-};
-
 type SpotifyPlaylist = {
   id: string;
   name: string;
@@ -40,6 +35,7 @@ type SpotifySearchResponse = {
 export const spotifyScopes = [
   "playlist-modify-public",
   "playlist-modify-private",
+  "user-read-private",
   "user-read-email",
 ].join(" ");
 
@@ -94,6 +90,7 @@ export async function exchangeCodeForTokens(code: string) {
       code,
       redirect_uri: redirectUri,
     }),
+    cache: "no-store",
   });
 
   if (!response.ok) {
@@ -115,6 +112,7 @@ export async function refreshSpotifyAccessToken(refreshToken: string) {
       grant_type: "refresh_token",
       refresh_token: refreshToken,
     }),
+    cache: "no-store",
   });
 
   if (!response.ok) {
@@ -159,6 +157,7 @@ export async function spotifyFetch<T>(
 ) {
   const response = await fetch(`${SPOTIFY_API_URL}${endpoint}`, {
     ...options,
+    cache: "no-store",
     headers: {
       Authorization: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
@@ -168,28 +167,33 @@ export async function spotifyFetch<T>(
 
   if (!response.ok) {
     const text = await response.text();
+
+    console.error("Spotify API failed", {
+      endpoint,
+      status: response.status,
+      text,
+    });
+
     throw new Error(`Spotify API error: ${text}`);
+  }
+
+  if (response.status === 204) {
+    return null as T;
   }
 
   return response.json() as Promise<T>;
 }
 
-export async function getSpotifyProfile(accessToken: string) {
-  return spotifyFetch<SpotifyProfile>("/me", accessToken);
-}
-
 export async function createSpotifyPlaylist({
   accessToken,
-  userId,
   name,
   description,
 }: {
   accessToken: string;
-  userId: string;
   name: string;
   description: string;
 }) {
-  return spotifyFetch<SpotifyPlaylist>(`/users/${userId}/playlists`, accessToken, {
+  return spotifyFetch<SpotifyPlaylist>("/me/playlists", accessToken, {
     method: "POST",
     body: JSON.stringify({
       name,
@@ -216,6 +220,7 @@ export async function searchSpotifyTrackUris({
       q: query,
       type: "track",
       limit: String(limitPerQuery),
+      market: "SG",
     });
 
     const result = await spotifyFetch<SpotifySearchResponse>(
