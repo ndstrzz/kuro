@@ -214,6 +214,25 @@ app.post("/spotify/browser-add-tracks", async (req, res) => {
   }
 });
 
+app.use(
+  (
+    err: any,
+    req: express.Request,
+    res: express.Response,
+    next: express.NextFunction,
+  ) => {
+    console.error("========== KURO ERROR ==========");
+    console.error(err);
+    console.error(err.stack);
+
+    res.status(500).json({
+      success: false,
+      error: err?.message || "Unknown server error",
+      stack: err?.stack,
+    });
+  },
+);
+
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Kuro browser agent running on port ${PORT}`);
 });
