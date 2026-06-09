@@ -101,7 +101,6 @@ export default function KuroHome() {
 
       try {
         const parsedTask = JSON.parse(pendingTask) as PendingSpotifyTask;
-
         localStorage.removeItem("kuro_pending_spotify_task");
 
         setExecuting(true);
@@ -109,28 +108,7 @@ export default function KuroHome() {
         setSpotifyResult(null);
         setExecutionMessage("Spotify connected. Creating playlist now...");
 
-        const response = await fetch("/api/spotify/create-playlist", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(parsedTask),
-        });
-
-        const data = await response.json();
-
-        if (!response.ok || !data.success) {
-          throw new Error(data.error || "Failed to create playlist.");
-        }
-
-        setSpotifyResult({
-          playlistName: data.playlistName,
-          playlistUrl: data.playlistUrl,
-          tracksAdded: data.tracksAdded,
-        });
-
-        setExecutionMessage("Playlist created successfully.");
-        setCompleted(true);
+        await createPlaylistThenRunBrowserAgent(parsedTask);
       } catch (error) {
         console.error(error);
         setExecutionMessage("Spotify connected, but playlist creation failed.");
@@ -141,6 +119,66 @@ export default function KuroHome() {
 
     continueSpotifyAfterLogin();
   }, []);
+
+  async function createPlaylistThenRunBrowserAgent(spotifyTask: PendingSpotifyTask) {
+    const browserAgentUrl = process.env.NEXT_PUBLIC_BROWSER_AGENT_URL;
+
+    if (!browserAgentUrl) {
+      setExecutionMessage("Browser agent backend URL is missing.");
+      return;
+    }
+
+    const playlistResponse = await fetch("/api/spotify/create-playlist", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(spotifyTask),
+    });
+
+    const playlistData = await playlistResponse.json();
+
+    if (playlistResponse.status === 401 && playlistData.needsAuth && playlistData.authUrl) {
+      localStorage.setItem("kuro_pending_spotify_task", JSON.stringify(spotifyTask));
+      setExecutionMessage("Redirecting to Spotify login...");
+      window.location.href = playlistData.authUrl;
+      return;
+    }
+
+    if (!playlistResponse.ok || !playlistData.success) {
+      throw new Error(playlistData.error || "Failed to create Spotify playlist.");
+    }
+
+    setExecutionMessage("Playlist created. Starting Kuro browser agent...");
+
+    const browserResponse = await fetch(`${browserAgentUrl}/spotify/browser-add-tracks`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        playlistUrl: playlistData.playlistUrl,
+        playlistName: playlistData.playlistName,
+        prompt: spotifyTask.prompt,
+        selectedMood: spotifyTask.selectedMood,
+      }),
+    });
+
+    const browserData = await browserResponse.json();
+
+    if (!browserResponse.ok || !browserData.success) {
+      throw new Error(browserData.error || "Browser agent failed.");
+    }
+
+    setSpotifyResult({
+      playlistName: playlistData.playlistName,
+      playlistUrl: playlistData.playlistUrl,
+      tracksAdded: browserData.tracksAdded || 0,
+    });
+
+    setExecutionMessage(browserData.message || "Playlist created successfully.");
+    setCompleted(true);
+  }
 
   async function handleSubmit() {
     if (!message.trim()) return;
@@ -249,7 +287,7 @@ export default function KuroHome() {
     setExecuting(true);
     setCompleted(false);
     setSpotifyResult(null);
-    setExecutionMessage("Connecting Spotify and creating playlist...");
+    setExecutionMessage("Creating Spotify playlist...");
 
     try {
       const spotifyTask: PendingSpotifyTask = {
@@ -258,39 +296,7 @@ export default function KuroHome() {
         selectedMood: selectedRecommendation.spotifyDetails.mood,
       };
 
-      const response = await fetch("/api/spotify/create-playlist", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(spotifyTask),
-      });
-
-      const data = await response.json();
-
-      if (response.status === 401 && data.needsAuth && data.authUrl) {
-        localStorage.setItem(
-          "kuro_pending_spotify_task",
-          JSON.stringify(spotifyTask),
-        );
-
-        setExecutionMessage("Redirecting to Spotify login...");
-        window.location.href = data.authUrl;
-        return;
-      }
-
-      if (!response.ok || !data.success) {
-        throw new Error(data.error || "Failed to create playlist.");
-      }
-
-      setSpotifyResult({
-        playlistName: data.playlistName,
-        playlistUrl: data.playlistUrl,
-        tracksAdded: data.tracksAdded,
-      });
-
-      setExecutionMessage("Playlist created successfully.");
-      setCompleted(true);
+      await createPlaylistThenRunBrowserAgent(spotifyTask);
     } catch (error) {
       console.error(error);
       setExecutionMessage("Could not create the Spotify playlist. Please try again.");
@@ -430,16 +436,7 @@ export default function KuroHome() {
                     Operating model
                   </p>
 
-                  {!selectedRecommendation ? (
-                    <>
-                      <h3 className="mt-3 text-2xl font-semibold">
-                        Research. Recommend. Approve. Execute.
-                      </h3>
-                      <p className="mt-3 text-sm leading-relaxed text-white/45">
-                        Kuro prepares choices first, then asks for approval before any action.
-                      </p>
-                    </>
-                  ) : (
+                  {selectedRecommendation && (
                     <>
                       <h3 className="mt-3 text-2xl font-semibold">
                         {selectedRecommendation.title}
@@ -448,6 +445,29 @@ export default function KuroHome() {
                       <p className="mt-3 text-sm leading-relaxed text-white/45">
                         {selectedRecommendation.description}
                       </p>
+
+                      {selectedRecommendation.spotifyDetails && (
+                        <div className="mt-5 space-y-3">
+                          <Detail
+                            label="Playlist"
+                            value={selectedRecommendation.spotifyDetails.playlistName}
+                            strong
+                          />
+                          <Detail
+                            label="Mood"
+                            value={selectedRecommendation.spotifyDetails.mood}
+                          />
+                          <Detail
+                            label="Tracks"
+                            value={selectedRecommendation.spotifyDetails.estimatedTracks}
+                          />
+                          <Detail
+                            label="Duration"
+                            value={selectedRecommendation.spotifyDetails.estimatedDuration}
+                          />
+                          <Detail label="Source" value="Spotify Browser Agent" />
+                        </div>
+                      )}
 
                       {selectedRecommendation.flightDetails && (
                         <div className="mt-5 space-y-3">
@@ -471,37 +491,6 @@ export default function KuroHome() {
                           <Detail label="Source" value="Trip.com only" />
                         </div>
                       )}
-
-                      {selectedRecommendation.spotifyDetails && (
-                        <div className="mt-5 space-y-3">
-                          <Detail
-                            label="Playlist"
-                            value={selectedRecommendation.spotifyDetails.playlistName}
-                            strong
-                          />
-                          <Detail
-                            label="Mood"
-                            value={selectedRecommendation.spotifyDetails.mood}
-                          />
-                          <Detail
-                            label="Tracks"
-                            value={selectedRecommendation.spotifyDetails.estimatedTracks}
-                          />
-                          <Detail
-                            label="Duration"
-                            value={selectedRecommendation.spotifyDetails.estimatedDuration}
-                          />
-                          <Detail label="Source" value="Spotify" />
-                        </div>
-                      )}
-
-                      <div className="mt-5 rounded-3xl border border-white/10 bg-white/[0.04] p-4">
-                        <p className="text-xs leading-relaxed text-white/45">
-                          {operation.type === "spotify"
-                            ? "Kuro will connect to Spotify, create a playlist, search suitable tracks, add them, and return the playlist link."
-                            : "Kuro will open Trip.com for this option. It will stop before payment or final booking confirmation."}
-                        </p>
-                      </div>
 
                       <button
                         onClick={handleApprove}

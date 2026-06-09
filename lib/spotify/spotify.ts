@@ -20,15 +20,6 @@ type SpotifyPlaylist = {
   };
 };
 
-type SpotifySearchResponse = {
-  tracks: {
-    items: {
-      uri: string;
-      name: string;
-    }[];
-  };
-};
-
 export const spotifyScopes = [
   "playlist-modify-public",
   "playlist-modify-private",
@@ -39,29 +30,36 @@ export const spotifyScopes = [
 
 function getRequiredEnv(name: string) {
   const value = process.env[name];
-  if (!value) throw new Error(`Missing environment variable: ${name}`);
+
+  if (!value) {
+    throw new Error(`Missing environment variable: ${name}`);
+  }
+
   return value;
 }
 
 function getBasicAuthHeader() {
-  return Buffer.from(
-    `${getRequiredEnv("SPOTIFY_CLIENT_ID")}:${getRequiredEnv("SPOTIFY_CLIENT_SECRET")}`,
-  ).toString("base64");
+  const clientId = getRequiredEnv("SPOTIFY_CLIENT_ID");
+  const clientSecret = getRequiredEnv("SPOTIFY_CLIENT_SECRET");
+
+  return Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
 }
 
 export function getSpotifyAuthUrl() {
+  const state = crypto.randomUUID();
+
   const params = new URLSearchParams({
     response_type: "code",
     client_id: getRequiredEnv("SPOTIFY_CLIENT_ID"),
     scope: spotifyScopes,
     redirect_uri: getRequiredEnv("SPOTIFY_REDIRECT_URI"),
-    state: crypto.randomUUID(),
+    state,
     show_dialog: "true",
   });
 
   return {
     url: `${SPOTIFY_AUTH_URL}?${params.toString()}`,
-    state: params.get("state")!,
+    state,
   };
 }
 
@@ -81,7 +79,30 @@ export async function exchangeCodeForTokens(code: string) {
   });
 
   if (!response.ok) {
-    throw new Error(await response.text());
+    const text = await response.text();
+    throw new Error(`Spotify token exchange failed: ${text}`);
+  }
+
+  return response.json() as Promise<SpotifyTokenResponse>;
+}
+
+export async function refreshSpotifyAccessToken(refreshToken: string) {
+  const response = await fetch(SPOTIFY_TOKEN_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Basic ${getBasicAuthHeader()}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+    }),
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Spotify refresh failed: ${text}`);
   }
 
   return response.json() as Promise<SpotifyTokenResponse>;
@@ -89,10 +110,32 @@ export async function exchangeCodeForTokens(code: string) {
 
 export async function getSpotifyAccessTokenFromCookies() {
   const cookieStore = await cookies();
-  return cookieStore.get("spotify_access_token")?.value || null;
+
+  const accessToken = cookieStore.get("spotify_access_token")?.value;
+  const refreshToken = cookieStore.get("spotify_refresh_token")?.value;
+
+  if (accessToken) {
+    return accessToken;
+  }
+
+  if (!refreshToken) {
+    return null;
+  }
+
+  const refreshed = await refreshSpotifyAccessToken(refreshToken);
+
+  cookieStore.set("spotify_access_token", refreshed.access_token, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    maxAge: refreshed.expires_in,
+    path: "/",
+  });
+
+  return refreshed.access_token;
 }
 
-async function spotifyFetch<T>(
+export async function spotifyFetch<T>(
   endpoint: string,
   accessToken: string,
   options?: RequestInit,
@@ -109,15 +152,19 @@ async function spotifyFetch<T>(
 
   if (!response.ok) {
     const text = await response.text();
+
     console.error("Spotify API failed:", {
       endpoint,
       status: response.status,
       text,
     });
-    throw new Error(text);
+
+    throw new Error(`Spotify API error: ${text}`);
   }
 
-  if (response.status === 204) return null as T;
+  if (response.status === 204) {
+    return null as T;
+  }
 
   return response.json() as Promise<T>;
 }
@@ -142,93 +189,16 @@ export async function createSpotifyPlaylist({
   });
 }
 
-export async function searchSpotifyTrackUri({
-  accessToken,
-  query,
-}: {
-  accessToken: string;
-  query: string;
-}) {
-  const params = new URLSearchParams({
-    q: query,
-    type: "track",
-    limit: "1",
-    market: "SG",
-  });
-
-  const result = await spotifyFetch<SpotifySearchResponse>(
-    `/search?${params.toString()}`,
-    accessToken,
-  );
-
-  return result.tracks.items[0]?.uri || null;
-}
-
-export async function addSingleTrackToPlaylist({
-  accessToken,
-  playlistId,
-  uri,
-}: {
-  accessToken: string;
-  playlistId: string;
-  uri: string;
-}) {
-  return spotifyFetch(`/playlists/${playlistId}/tracks`, accessToken, {
-    method: "POST",
-    body: JSON.stringify({
-      uris: [uri],
-      position: 0,
-    }),
-  });
-}
-
-export async function buildAndInsertTracks({
-  accessToken,
-  playlistId,
-  prompt,
-  selectedMood,
-}: {
-  accessToken: string;
-  playlistId: string;
-  prompt: string;
-  selectedMood?: string;
-}) {
-  const seeds = buildPlaylistQueries(prompt, selectedMood);
-  let added = 0;
-
-  for (const seed of seeds) {
-    try {
-      const uri = await searchSpotifyTrackUri({
-        accessToken,
-        query: seed,
-      });
-
-      if (!uri) continue;
-
-      await addSingleTrackToPlaylist({
-        accessToken,
-        playlistId,
-        uri,
-      });
-
-      added += 1;
-    } catch (error) {
-      console.error(`Failed to add track for seed: ${seed}`, error);
-    }
-  }
-
-  return added;
-}
-
-export function buildPlaylistQueries(prompt: string, selectedMood?: string) {
+export function buildPlaylistSeeds(prompt: string, selectedMood?: string) {
   const lowerPrompt = `${prompt} ${selectedMood || ""}`.toLowerCase();
 
   if (lowerPrompt.includes("seminar") || lowerPrompt.includes("professional")) {
     return [
       "Ludovico Einaudi Nuvole Bianche",
+      "Yiruma River Flows In You",
       "Nils Frahm Says",
       "Ólafur Arnalds Near Light",
-      "Yiruma River Flows In You",
+      "Max Richter On The Nature Of Daylight",
       "soft piano instrumental",
       "coffeehouse jazz instrumental",
       "lofi focus instrumental",
@@ -245,6 +215,9 @@ export function buildPlaylistQueries(prompt: string, selectedMood?: string) {
       "study jazz instrumental",
       "chillhop instrumental",
       "ambient piano music",
+      "smooth jazz instrumental",
+      "calm piano music",
+      "focus music instrumental",
     ];
   }
 
@@ -260,6 +233,25 @@ export function buildPlaylistQueries(prompt: string, selectedMood?: string) {
       "modern jazz lounge",
       "cafe jazz instrumental",
       "dinner jazz instrumental",
+      "jazz lounge instrumental",
+      "cocktail jazz",
+      "smooth bossa nova",
+      "soft lounge music",
+    ];
+  }
+
+  if (lowerPrompt.includes("energetic") || lowerPrompt.includes("networking")) {
+    return [
+      "upbeat lounge music",
+      "warm indie pop",
+      "feel good pop",
+      "light electronic upbeat",
+      "networking event background",
+      "happy acoustic pop",
+      "chill upbeat songs",
+      "modern cafe pop",
+      "soft upbeat background",
+      "feel good indie",
     ];
   }
 

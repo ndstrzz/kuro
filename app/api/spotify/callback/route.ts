@@ -4,12 +4,12 @@ import { exchangeCodeForTokens } from "@/lib/spotify/spotify";
 export const runtime = "nodejs";
 
 function getAppUrl(request: NextRequest) {
-  const protocol = request.headers.get("x-forwarded-proto") || "https";
-  const host = request.headers.get("x-forwarded-host") || request.headers.get("host");
+  const protocol =
+    process.env.NODE_ENV === "production"
+      ? "https"
+      : "http";
 
-  if (!host) {
-    return process.env.NEXT_PUBLIC_APP_URL || "https://kuro-three.vercel.app";
-  }
+  const host = request.headers.get("host") || "127.0.0.1:3000";
 
   return `${protocol}://${host}`;
 }
@@ -40,7 +40,7 @@ export async function GET(request: NextRequest) {
     response.cookies.set("spotify_access_token", tokens.access_token, {
       httpOnly: true,
       sameSite: "lax",
-      secure: true,
+      secure: process.env.NODE_ENV === "production",
       maxAge: tokens.expires_in,
       path: "/",
     });
@@ -49,7 +49,7 @@ export async function GET(request: NextRequest) {
       response.cookies.set("spotify_refresh_token", tokens.refresh_token, {
         httpOnly: true,
         sameSite: "lax",
-        secure: true,
+        secure: process.env.NODE_ENV === "production",
         maxAge: 60 * 60 * 24 * 30,
         path: "/",
       });
@@ -58,7 +58,7 @@ export async function GET(request: NextRequest) {
     response.cookies.set("spotify_auth_state", "", {
       httpOnly: true,
       sameSite: "lax",
-      secure: true,
+      secure: process.env.NODE_ENV === "production",
       maxAge: 0,
       path: "/",
     });
