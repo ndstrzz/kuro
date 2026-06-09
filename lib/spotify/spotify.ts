@@ -183,7 +183,7 @@ export async function createSpotifyPlaylist({
     body: JSON.stringify({
       name,
       description,
-      public: false,
+      public: true,
       collaborative: false,
     }),
   });
