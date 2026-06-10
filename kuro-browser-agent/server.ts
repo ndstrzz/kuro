@@ -1,6 +1,8 @@
 import express from "express";
 import cors from "cors";
 import path from "path";
+import fs from "fs";
+import os from "os";
 import { chromium, Locator, Page } from "playwright";
 
 const app = express();
@@ -106,6 +108,73 @@ function normaliseLower(value: string) {
   return normalise(value).toLowerCase();
 }
 
+function getOperaExecutablePath() {
+  const platform = os.platform();
+
+  const possiblePaths =
+    platform === "darwin"
+      ? [
+          "/Applications/Opera.app/Contents/MacOS/Opera",
+          "/Applications/Opera GX.app/Contents/MacOS/Opera GX",
+        ]
+      : platform === "win32"
+        ? [
+            path.join(
+              process.env.LOCALAPPDATA || "",
+              "Programs",
+              "Opera",
+              "opera.exe"
+            ),
+            path.join(
+              process.env.LOCALAPPDATA || "",
+              "Programs",
+              "Opera GX",
+              "opera.exe"
+            ),
+            "C:\\Program Files\\Opera\\opera.exe",
+            "C:\\Program Files\\Opera GX\\opera.exe",
+          ]
+        : [
+            "/usr/bin/opera",
+            "/usr/bin/opera-stable",
+            "/snap/bin/opera",
+          ];
+
+  return possiblePaths.find((item) => item && fs.existsSync(item));
+}
+
+function getBrowserLaunchOptions() {
+  const operaPath = getOperaExecutablePath();
+
+  const baseOptions = {
+    headless: false,
+    slowMo: 120,
+    viewport: {
+      width: 1440,
+      height: 950,
+    },
+    args: [
+      "--disable-dev-shm-usage",
+      "--disable-gpu",
+      "--disable-software-rasterizer",
+      "--start-maximized",
+    ],
+  };
+
+  if (operaPath) {
+    return {
+      ...baseOptions,
+      executablePath: operaPath,
+    };
+  }
+
+  console.warn("Opera was not found. Falling back to Chrome channel.");
+  return {
+    ...baseOptions,
+    channel: "chrome" as const,
+  };
+}
+
 /* ----------------------------- Desktop Agent ----------------------------- */
 
 function isDangerousPrompt(prompt: string) {
@@ -131,25 +200,11 @@ function isDangerousPrompt(prompt: string) {
 function inferUrlFromPrompt(prompt: string) {
   const text = normaliseLower(prompt);
 
-  if (text.includes("gmail") || text.includes("email")) {
-    return "https://mail.google.com";
-  }
-
-  if (text.includes("calendar")) {
-    return "https://calendar.google.com";
-  }
-
-  if (text.includes("spotify")) {
-    return "https://open.spotify.com";
-  }
-
-  if (text.includes("chatgpt")) {
-    return "https://chatgpt.com";
-  }
-
-  if (text.includes("google")) {
-    return "https://www.google.com";
-  }
+  if (text.includes("gmail") || text.includes("email")) return "https://mail.google.com";
+  if (text.includes("calendar")) return "https://calendar.google.com";
+  if (text.includes("spotify")) return "https://open.spotify.com";
+  if (text.includes("chatgpt")) return "https://chatgpt.com";
+  if (text.includes("google")) return "https://www.google.com";
 
   return "https://www.google.com";
 }
@@ -170,8 +225,8 @@ function buildDesktopPlan(prompt: string): DesktopPlanStep[] {
   if (text.includes("gmail") || text.includes("email") || text.includes("inbox")) {
     steps.push({
       id: "step_002",
-      title: "Open Gmail",
-      description: "Kuro will open Gmail in a controlled browser window.",
+      title: "Open Gmail in Kuro Workspace",
+      description: "Kuro will open Gmail inside the dedicated Opera workspace.",
       action: "open_gmail",
       value: "https://mail.google.com",
       safetyLevel: "safe",
@@ -187,8 +242,8 @@ function buildDesktopPlan(prompt: string): DesktopPlanStep[] {
   } else if (text.includes("calendar") || text.includes("schedule")) {
     steps.push({
       id: "step_002",
-      title: "Open Google Calendar",
-      description: "Kuro will open Google Calendar so the user can review the schedule.",
+      title: "Open Google Calendar in Kuro Workspace",
+      description: "Kuro will open Google Calendar in Opera.",
       action: "open_calendar",
       value: "https://calendar.google.com",
       safetyLevel: "safe",
@@ -203,8 +258,8 @@ function buildDesktopPlan(prompt: string): DesktopPlanStep[] {
 
     steps.push({
       id: "step_002",
-      title: "Search the web",
-      description: "Kuro will open Google and search the requested topic.",
+      title: "Search the web in Kuro Workspace",
+      description: "Kuro will open Opera and search the requested topic.",
       action: "search_web",
       value: query || prompt,
       safetyLevel: "safe",
@@ -213,7 +268,7 @@ function buildDesktopPlan(prompt: string): DesktopPlanStep[] {
     steps.push({
       id: "step_002",
       title: "Open relevant workspace",
-      description: "Kuro will open the most relevant website for the request.",
+      description: "Kuro will open the most relevant website in Opera.",
       action: "open_url",
       value: inferUrlFromPrompt(prompt),
       safetyLevel: "safe",
@@ -235,24 +290,13 @@ function buildDesktopPlan(prompt: string): DesktopPlanStep[] {
 }
 
 async function getDesktopPage() {
-  const userDataDir = path.join(process.cwd(), ".kuro-desktop-agent-profile");
+  const userDataDir = path.join(process.cwd(), ".kuro-opera-workspace-profile");
 
   if (!desktopContext) {
-    desktopContext = await chromium.launchPersistentContext(userDataDir, {
-      channel: "chrome",
-      headless: false,
-      slowMo: 120,
-      viewport: {
-        width: 1440,
-        height: 950,
-      },
-      args: [
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-        "--disable-software-rasterizer",
-        "--start-maximized",
-      ],
-    });
+    desktopContext = await chromium.launchPersistentContext(
+      userDataDir,
+      getBrowserLaunchOptions()
+    );
   }
 
   return desktopContext.pages()[0] || (await desktopContext.newPage());
@@ -281,7 +325,11 @@ async function executeDesktopStep(page: Page, step: DesktopPlanStep) {
     };
   }
 
-  if (step.action === "open_url" || step.action === "open_gmail" || step.action === "open_calendar") {
+  if (
+    step.action === "open_url" ||
+    step.action === "open_gmail" ||
+    step.action === "open_calendar"
+  ) {
     const url = step.value || "https://www.google.com";
 
     await page.goto(url, {
@@ -295,7 +343,7 @@ async function executeDesktopStep(page: Page, step: DesktopPlanStep) {
       step,
       success: true,
       url: page.url(),
-      message: `Kuro opened ${url}.`,
+      message: `Kuro opened ${url} in Opera Workspace.`,
     };
   }
 
@@ -313,7 +361,7 @@ async function executeDesktopStep(page: Page, step: DesktopPlanStep) {
       step,
       success: true,
       url: page.url(),
-      message: `Kuro searched Google for "${query}".`,
+      message: `Kuro searched Google for "${query}" in Opera Workspace.`,
     };
   }
 
@@ -329,7 +377,7 @@ async function executeDesktopStep(page: Page, step: DesktopPlanStep) {
       step,
       success: true,
       extractedText: pageText.slice(0, 4000),
-      message: "Kuro extracted the visible page text.",
+      message: "Kuro extracted visible page text from Opera Workspace.",
     };
   }
 
@@ -743,6 +791,7 @@ app.get("/", (_req, res) => {
     success: true,
     service: "Kuro Executive OS Agent",
     status: "running",
+    browser: getOperaExecutablePath() ? "Opera Workspace" : "Chrome fallback",
     modules: ["desktop", "gmail", "spotify"],
     safety:
       "Kuro can open and read apps/sites, but will stop before sending, deleting, purchasing, paying, or submitting.",
@@ -769,6 +818,7 @@ app.post("/desktop/plan", async (req, res) => {
       prompt: body.prompt,
       plan,
       approvalRequired: true,
+      browser: getOperaExecutablePath() ? "Opera Workspace" : "Chrome fallback",
       message: "Kuro prepared a permission-first desktop action plan.",
     });
   } catch (error) {
@@ -804,9 +854,10 @@ app.post("/desktop/execute", async (req, res) => {
 
     return res.json({
       success: true,
+      browser: getOperaExecutablePath() ? "Opera Workspace" : "Chrome fallback",
       results,
       currentUrl: page.url(),
-      message: "Kuro executed the approved safe desktop steps.",
+      message: "Kuro executed the approved safe desktop steps in Opera Workspace.",
     });
   } catch (error) {
     console.error("========== KURO DESKTOP EXECUTE ERROR ==========");
@@ -842,8 +893,9 @@ app.post("/desktop/open-url", async (req, res) => {
 
     return res.json({
       success: true,
+      browser: getOperaExecutablePath() ? "Opera Workspace" : "Chrome fallback",
       openedUrl: page.url(),
-      message: `Kuro opened ${body.url}.`,
+      message: `Kuro opened ${body.url} in Opera Workspace.`,
     });
   } catch (error) {
     console.error("========== KURO OPEN URL ERROR ==========");
@@ -884,10 +936,11 @@ app.post("/desktop/search-web", async (req, res) => {
 
     return res.json({
       success: true,
+      browser: getOperaExecutablePath() ? "Opera Workspace" : "Chrome fallback",
       query: body.query,
       openedUrl: page.url(),
       visibleText: text.slice(0, 4000),
-      message: `Kuro searched the web for "${body.query}".`,
+      message: `Kuro searched the web for "${body.query}" in Opera Workspace.`,
     });
   } catch (error) {
     console.error("========== KURO SEARCH WEB ERROR ==========");
@@ -913,9 +966,10 @@ app.post("/desktop/open-gmail", async (_req, res) => {
 
     return res.json({
       success: true,
+      browser: getOperaExecutablePath() ? "Opera Workspace" : "Chrome fallback",
       openedUrl: page.url(),
       message:
-        "Kuro opened Gmail. If login is required, please log in manually. Kuro will not send emails without approval.",
+        "Kuro opened Gmail in Opera Workspace. If login is required, please log in manually. Kuro will not send emails without approval.",
     });
   } catch (error) {
     console.error("========== KURO OPEN GMAIL ERROR ==========");
@@ -941,9 +995,10 @@ app.post("/desktop/open-calendar", async (_req, res) => {
 
     return res.json({
       success: true,
+      browser: getOperaExecutablePath() ? "Opera Workspace" : "Chrome fallback",
       openedUrl: page.url(),
       message:
-        "Kuro opened Google Calendar. Kuro will not create or edit events without approval.",
+        "Kuro opened Google Calendar in Opera Workspace. Kuro will not create or edit events without approval.",
     });
   } catch (error) {
     console.error("========== KURO OPEN CALENDAR ERROR ==========");
@@ -967,9 +1022,10 @@ app.post("/desktop/extract-visible-text", async (_req, res) => {
 
     return res.json({
       success: true,
+      browser: getOperaExecutablePath() ? "Opera Workspace" : "Chrome fallback",
       currentUrl: page.url(),
       visibleText: text.slice(0, 8000),
-      message: "Kuro extracted visible text from the active browser page.",
+      message: "Kuro extracted visible text from the active Opera Workspace page.",
     });
   } catch (error) {
     console.error("========== KURO EXTRACT TEXT ERROR ==========");
@@ -991,7 +1047,7 @@ app.post("/desktop/close", async (_req, res) => {
 
     return res.json({
       success: true,
-      message: "Kuro closed the desktop browser session.",
+      message: "Kuro closed the Opera Workspace session.",
     });
   } catch (error) {
     console.error("========== KURO DESKTOP CLOSE ERROR ==========");
@@ -1264,4 +1320,9 @@ app.use(
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Kuro Executive OS Agent running on port ${PORT}`);
+  console.log(
+    getOperaExecutablePath()
+      ? `Opera Workspace connected: ${getOperaExecutablePath()}`
+      : "Opera not found. Falling back to Chrome."
+  );
 });
