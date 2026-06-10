@@ -30,6 +30,8 @@ export type FlightDetails = {
   airline: string;
   departureTime: string;
   arrivalTime?: string;
+  departureTerminal?: string;
+  arrivalTerminal?: string;
   duration?: string;
   stops?: string;
   baggage?: string;

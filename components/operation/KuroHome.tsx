@@ -542,92 +542,77 @@ export default function KuroHome() {
 
     setExecuting(true);
     setExecutionComplete(false);
-    setExecutionMessage("Preparing Trip.com browser handoff...");
+    setExecutionMessage("Sending Trip.com task to local browser agent...");
 
     setBrowserStatus({
       connected: false,
-      surface: "Chrome",
-      currentAction: "Preparing local browser agent",
-      target: "localhost:4000",
+      surface: "Trip.com",
+      currentAction: "Calling localhost:4000 directly from your browser",
+      target: "http://localhost:4000/trip/open-flight",
       status: "running",
     });
 
     pushLog("approval", "Human approval received for Trip.com flight workflow.", "done");
     scheduleLog(350, "browser", "Connecting to local browser agent on localhost:4000.");
-    scheduleLog(900, "browser", "Launching persistent Google Chrome profile.");
-    scheduleLog(1400, "browser", "Opening the exact selected Trip.com URL.");
-    scheduleLog(2000, "browser", "Kuro will stop before payment or final booking confirmation.");
+    scheduleLog(900, "browser", "Opening Trip.com in persistent Chrome.");
+    scheduleLog(1400, "browser", "Finding matching flight row by airline, time, route, and price.");
+    scheduleLog(2000, "browser", "Clicking Select / View Details for the selected option.");
 
-    const statusOne = window.setTimeout(() => {
+    try {
+      const response = await fetch("http://localhost:4000/trip/open-flight", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          tripUrl,
+          recommendationId: selectedRecommendation.id,
+          recommendationTitle: selectedRecommendation.title,
+          selectedFlight: selectedRecommendation.flightDetails,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Local Trip.com browser agent failed.");
+      }
+
+      setExecutionMessage(
+        data.message || "Trip.com opened and matching flight selected."
+      );
+      setExecuting(false);
+      setExecutionComplete(true);
+
       setBrowserStatus({
         connected: true,
         surface: "Trip.com",
-        currentAction: "Opening selected flight option",
-        target: "Selected recommendation URL",
-        status: "running",
+        currentAction: "Matching flight selected successfully",
+        target: data.openedUrl || selectedRecommendation.title,
+        status: "done",
       });
-    }, 900);
 
-    const statusTwo = window.setTimeout(() => {
-      setBrowserStatus({
-        connected: true,
-        surface: "Trip.com",
-        currentAction: "Preparing passenger workflow",
-        target: selectedRecommendation.title,
-        status: "running",
-      });
-    }, 1900);
+      pushLog("browser", data.message || "Matching Trip.com flight selected.", "done");
+      pushLog("kuro", "Trip.com selection complete. Ready for next step.", "done");
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Failed to open Trip.com with local browser agent.";
 
-    timeoutRefs.current.push(statusOne, statusTwo);
-
-    const response = await fetch("/api/operations/execute", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        tripUrl,
-        recommendationId: selectedRecommendation.id,
-        recommendationTitle: selectedRecommendation.title,
-      }),
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      setExecutionMessage(data.error || "Failed to open Trip.com.");
+      setExecutionMessage(message);
       setExecuting(false);
 
       setBrowserStatus({
         connected: false,
-        surface: "Browser Agent",
-        currentAction: data.error || "Failed to open Trip.com.",
+        surface: "Trip.com",
+        currentAction: message,
         target: "localhost:4000",
         status: "error",
       });
 
-      pushLog("browser", data.error || "Browser handoff failed.", "error");
-      return;
+      pushLog("browser", message, "error");
     }
-
-    setExecutionMessage(data.message || "Trip.com opened successfully.");
-    setExecuting(false);
-    setExecutionComplete(true);
-
-    setBrowserStatus({
-      connected: true,
-      surface: "Trip.com",
-      currentAction: "Selected Trip.com option opened successfully",
-      target: data.openedUrl || selectedRecommendation.title,
-      status: "done",
-    });
-
-    pushLog("browser", "Selected Trip.com option opened successfully.", "done");
-    pushLog(
-      "kuro",
-      "Trip.com mission handoff complete. Awaiting human review before payment.",
-      "done"
-    );
   }
 
   return (
