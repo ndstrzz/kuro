@@ -1,2 +1,5 @@
-2026/06/10-08:40:06.755 c9803 Creating DB /Users/nd/Desktop/kuro/kuro-browser-agent/.kuro-trip-chrome-profile/Default/Local Storage/leveldb since it was missing.
-2026/06/10-08:40:06.760 c9803 Reusing MANIFEST /Users/nd/Desktop/kuro/kuro-browser-agent/.kuro-trip-chrome-profile/Default/Local Storage/leveldb/MANIFEST-000001
+2026/06/10-09:12:24.254 d12b8 Reusing MANIFEST /Users/nd/Desktop/kuro/kuro-browser-agent/.kuro-trip-chrome-profile/Default/Local Storage/leveldb/MANIFEST-000001
+2026/06/10-09:12:24.256 d12b8 Recovering log #3
+2026/06/10-09:12:24.256 d12b8 Level-0 table #3: started
+2026/06/10-09:12:24.261 d12b8 Level-0 table #3: 58682 bytes OK
+2026/06/10-09:12:24.264 d12b8 Delete type=0 #3

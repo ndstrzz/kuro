@@ -19,15 +19,16 @@ import ExecutiveTimeline, {
 } from "@/components/operation/ExecutiveTimeline";
 import AgentNetworkCard from "@/components/cards/AgentNetworkCard";
 import RecommendationGrid from "@/components/recommendations/RecommendationGrid";
-import type { Operation } from "@/types/operation";
+import type { Operation, Recommendation } from "@/types/operation";
 
 const LOCAL_BROWSER_AGENT_URL = "http://localhost:4000";
+const MINIMUM_LOADING_MS = 5200;
 
 const suggestions = [
   {
     icon: Plane,
     title: "Book Flight",
-    prompt: "Find me the cheapest flight to Jakarta tomorrow",
+    prompt: "Book me the cheapest flight to New York tonight",
   },
   {
     icon: Music,
@@ -54,10 +55,29 @@ const emptyBrowserStatus: BrowserStatus = {
   status: "waiting",
 };
 
+function sleep(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function isFlightPrompt(prompt: string) {
+  const text = prompt.toLowerCase();
+
+  return (
+    text.includes("flight") ||
+    text.includes("flights") ||
+    text.includes("airfare") ||
+    text.includes("air ticket") ||
+    text.includes("ticket to") ||
+    text.includes("fly to") ||
+    text.includes("book me a flight")
+  );
+}
+
 export default function KuroHome() {
   const [message, setMessage] = useState("");
   const [operation, setOperation] = useState<Operation | null>(null);
   const [selectedRecommendationId, setSelectedRecommendationId] = useState<string | null>(null);
+  const [planningLoading, setPlanningLoading] = useState(false);
   const [executing, setExecuting] = useState(false);
   const [executionComplete, setExecutionComplete] = useState(false);
   const [executionMessage, setExecutionMessage] = useState("");
@@ -73,7 +93,7 @@ export default function KuroHome() {
     return (
       operation.recommendations.find(
         (item) => item.id === selectedRecommendationId
-      ) || operation.recommendations[0]
+      ) || operation.recommendations[0] || null
     );
   }, [operation, selectedRecommendationId]);
 
@@ -88,7 +108,7 @@ export default function KuroHome() {
   const actionLabel = useMemo(() => {
     if (executionComplete) return "Mission complete";
     if (executing && isSpotifyOperation) return "Creating playlist...";
-    if (executing && isTripOperation) return "Opening Trip.com...";
+    if (executing && isTripOperation) return "Selecting flight...";
     if (isSpotifyOperation) return "Create Playlist";
     if (isTripOperation) return "Book Flight";
     return "Approve Mission";
@@ -106,7 +126,7 @@ export default function KuroHome() {
         {
           id: "research",
           title: "Research Agent",
-          description: "Standing by for Exa research.",
+          description: "Standing by.",
           status: "waiting",
         },
         {
@@ -132,22 +152,26 @@ export default function KuroHome() {
         status: "done",
       },
       {
-        id: "research",
-        title: "Research Agent",
-        description: isSpotifyOperation
-          ? "Exa searched broadly across music trends and prepared Spotify-ready tracks."
+        id: "browser-search",
+        title: isTripOperation ? "Travel Browser Agent" : "Research Agent",
+        description: planningLoading
+          ? isTripOperation
+            ? "Opening Trip.com and reading live flight rows."
+            : "Researching and preparing recommendation cards."
           : isTripOperation
-            ? "Flight-only Trip.com planning completed."
-            : "Research plan completed.",
-        status: "done",
+            ? "Live Trip.com flight options retrieved."
+            : "Research completed.",
+        status: planningLoading ? "active" : "done",
       },
       {
-        id: "planning",
-        title: "Planning Agent",
-        description: selectedRecommendation
-          ? `Selected option: ${selectedRecommendation.title}`
-          : "Comparing available recommendations.",
-        status: executing || executionComplete ? "done" : "active",
+        id: "ranking",
+        title: "Ranking Agent",
+        description: planningLoading
+          ? "Ranking options by price, timing, and convenience."
+          : selectedRecommendation
+            ? `Selected option: ${selectedRecommendation.title}`
+            : "Recommendation cards prepared.",
+        status: planningLoading ? "waiting" : executing || executionComplete ? "done" : "active",
       },
       {
         id: "approval",
@@ -156,24 +180,27 @@ export default function KuroHome() {
           ? "Human approval received and recorded."
           : executing
             ? "Approval received. Executing safely."
-            : "Waiting for approval before browser action.",
-        status: executionComplete || executing ? "done" : "active",
+            : planningLoading
+              ? "Waiting for ranked options."
+              : "Waiting for approval before browser action.",
+        status: executionComplete || executing ? "done" : planningLoading ? "waiting" : "active",
       },
       {
-        id: "browser",
-        title: "Browser Agent",
+        id: "execution",
+        title: "Browser Execution",
         description: executionComplete
           ? "Browser handoff completed."
           : executing
             ? isSpotifyOperation
               ? "Chrome is creating the Spotify playlist."
-              : "Chrome is executing the approved travel task."
-            : "Ready to open the selected external workflow.",
+              : "Chrome is selecting the matching Trip.com flight."
+            : "Ready to execute selected option.",
         status: executionComplete ? "done" : executing ? "active" : "waiting",
       },
     ];
   }, [
     operation,
+    planningLoading,
     selectedRecommendation,
     executing,
     executionComplete,
@@ -245,13 +272,14 @@ export default function KuroHome() {
 
   async function handleSubmit() {
     if (!message.trim()) return;
-  async function handleSubmit() {
-    if (!message.trim()) return;
 
     clearScheduledLogs();
 
+    const prompt = message.trim();
+
     setOperation(null);
     setSelectedRecommendationId(null);
+    setPlanningLoading(false);
     setExecuting(false);
     setExecutionComplete(false);
     setExecutionMessage("");
@@ -260,32 +288,33 @@ export default function KuroHome() {
     setLogs([]);
 
     pushLog("kuro", "Executive request received.", "done");
-    scheduleLog(350, "research", "Analysing request type.");
-    scheduleLog(900, "planning", "Preparing recommendation workflow.");
 
-    const lowerMessage = message.toLowerCase();
-    const isFlightRequest =
-      lowerMessage.includes("flight") ||
-      lowerMessage.includes("airfare") ||
-      lowerMessage.includes("air ticket") ||
-      lowerMessage.includes("ticket to") ||
-      lowerMessage.includes("fly to") ||
-      lowerMessage.includes("book me a flight");
+    if (isFlightPrompt(prompt)) {
+      const startedAt = Date.now();
 
-    if (isFlightRequest) {
-      setExecutionMessage("Opening Trip.com to retrieve live flight options...");
+      setPlanningLoading(true);
+      setExecutionMessage("Kuro is retrieving live Trip.com flight options...");
+
+      setOperation({
+        id: `operation-${Date.now()}`,
+        userPrompt: prompt,
+        type: "trip",
+        recommendations: [],
+      });
 
       setBrowserStatus({
         connected: true,
         surface: "Trip.com",
-        currentAction: "Searching live Trip.com flight results",
+        currentAction: "Opening live Trip.com flight search",
         target: LOCAL_BROWSER_AGENT_URL,
         status: "running",
       });
 
-      pushLog("browser", "Sending flight search to local browser agent.", "running");
-      scheduleLog(1200, "browser", "Opening Trip.com and scraping visible flight rows.");
-      scheduleLog(2200, "planning", "Ranking live options by price and convenience.");
+      pushLog("planning", "Detected this as a flight booking request.", "done");
+      scheduleLog(400, "browser", "Opening Trip.com with the local browser agent.");
+      scheduleLog(1300, "browser", "Reading visible airline, time, terminal, and price rows.");
+      scheduleLog(2500, "planning", "Ranking live options by cheapest, balanced, and convenient.");
+      scheduleLog(3800, "approval", "Preparing approval-ready flight cards.");
 
       try {
         const response = await fetch(`${LOCAL_BROWSER_AGENT_URL}/trip/search-flights`, {
@@ -294,53 +323,61 @@ export default function KuroHome() {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            prompt: message,
+            prompt,
             timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
           }),
         });
 
         const data = await response.json();
+        const elapsed = Date.now() - startedAt;
+
+        if (elapsed < MINIMUM_LOADING_MS) {
+          await sleep(MINIMUM_LOADING_MS - elapsed);
+        }
 
         if (!response.ok) {
           throw new Error(data.error || "Failed to retrieve live Trip.com flights.");
         }
 
-        const recommendations = data.flights.map((flight: any, index: number) => ({
-          id: `trip-live-${index + 1}`,
-          kind: flight.tag,
-          title: flight.title,
-          subtitle: `${flight.route} · ${flight.price}`,
-          description: flight.description,
-          metadata: [
-            flight.price,
-            `${flight.departureTime} → ${flight.arrivalTime}`,
-            flight.airline,
-            flight.stops,
-          ],
-          tag: flight.tag,
-          flightDetails: {
-            price: flight.price,
-            route: flight.route,
-            airline: flight.airline,
-            departureTime: flight.departureTime,
-            arrivalTime: flight.arrivalTime,
-            departureTerminal: flight.departureTerminal,
-            arrivalTerminal: flight.arrivalTerminal,
-            duration: flight.duration,
-            stops: flight.stops,
-            tripUrl: flight.tripUrl,
-          },
-        }));
+        const recommendations: Recommendation[] = data.flights.map(
+          (flight: any, index: number) => ({
+            id: `trip-live-${index + 1}`,
+            kind: flight.tag,
+            title: flight.title,
+            subtitle: `${flight.route} · ${flight.price}`,
+            description: flight.description,
+            metadata: [
+              flight.price,
+              `${flight.departureTime} → ${flight.arrivalTime}`,
+              flight.airline,
+              flight.stops,
+            ],
+            tag: flight.tag,
+            flightDetails: {
+              price: flight.price,
+              route: flight.route,
+              airline: flight.airline,
+              departureTime: flight.departureTime,
+              arrivalTime: flight.arrivalTime,
+              departureTerminal: flight.departureTerminal,
+              arrivalTerminal: flight.arrivalTerminal,
+              duration: flight.duration,
+              stops: flight.stops,
+              tripUrl: flight.tripUrl,
+            },
+          })
+        );
 
         const nextOperation: Operation = {
           id: `operation-${Date.now()}`,
-          userPrompt: message,
+          userPrompt: prompt,
           type: "trip",
           recommendations,
         };
 
         setOperation(nextOperation);
         setSelectedRecommendationId(nextOperation.recommendations[0]?.id ?? null);
+        setPlanningLoading(false);
         setExecutionMessage("");
 
         setBrowserStatus({
@@ -352,128 +389,90 @@ export default function KuroHome() {
         });
 
         pushLog("browser", data.message || "Live Trip.com options retrieved.", "done");
-        pushLog("planning", "Live flight cards prepared with price, time, route, and airline.", "done");
+        pushLog("planning", "Flight cards prepared with live price, time, route, and airline.", "done");
         return;
       } catch (error) {
-        const message =
+        const elapsed = Date.now() - startedAt;
+
+        if (elapsed < MINIMUM_LOADING_MS) {
+          await sleep(MINIMUM_LOADING_MS - elapsed);
+        }
+
+        const errorMessage =
           error instanceof Error
             ? error.message
             : "Failed to retrieve live Trip.com flights.";
 
-        setExecutionMessage(message);
+        setPlanningLoading(false);
+        setExecutionMessage(errorMessage);
 
         setBrowserStatus({
           connected: false,
           surface: "Trip.com",
-          currentAction: message,
+          currentAction: errorMessage,
           target: LOCAL_BROWSER_AGENT_URL,
           status: "error",
         });
 
-        pushLog("browser", message, "error");
+        pushLog("browser", errorMessage, "error");
         return;
       }
     }
 
-    const response = await fetch("/api/operations/plan", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ prompt: message }),
-    });
+    setPlanningLoading(true);
+    setExecutionMessage("Kuro is preparing recommendations...");
 
-    const data = await response.json();
-
-    if (!response.ok) {
-      pushLog("kuro", data.error || "Failed to create operation.", "error");
-      setExecutionMessage(data.error || "Failed to create operation.");
-      return;
-    }
-
-    const nextOperation = data.operation as Operation;
-
-    setOperation(nextOperation);
-    setSelectedRecommendationId(nextOperation.recommendations[0]?.id ?? null);
-
-    if (nextOperation.type === "spotify" || nextOperation.type === "playlist") {
-      scheduleLog(
-        300,
-        "research",
-        "Broad music research complete. Spotify-ready track seeds prepared.",
-        "done"
-      );
-    } else {
-      scheduleLog(300, "research", "Research plan complete.", "done");
-    }
-
-    scheduleLog(
-      700,
-      "planning",
-      "Approval layer is ready. No external action will run without confirmation.",
-      "done"
-    );
-  }
-    clearScheduledLogs();
-
-    setOperation(null);
-    setSelectedRecommendationId(null);
-    setExecuting(false);
-    setExecutionComplete(false);
-    setExecutionMessage("");
-    setBrowserStatus(emptyBrowserStatus);
-    setElapsedSeconds(0);
-    setLogs([]);
-
-    pushLog("kuro", "Executive request received.", "done");
-    scheduleLog(350, "research", "Activating Exa research agent.");
+    scheduleLog(350, "research", "Activating research agent.");
     scheduleLog(900, "research", "Searching and extracting useful options.");
-    scheduleLog(
-      1450,
-      "planning",
-      "Ranking recommendations by usefulness, speed, and demo safety."
-    );
+    scheduleLog(1450, "planning", "Ranking recommendations by usefulness, speed, and demo safety.");
 
-    const response = await fetch("/api/operations/plan", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ prompt: message }),
-    });
+    try {
+      const response = await fetch("/api/operations/plan", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ prompt }),
+      });
 
-    const data = await response.json();
+      const data = await response.json();
 
-    if (!response.ok) {
-      pushLog("kuro", data.error || "Failed to create operation.", "error");
-      setExecutionMessage(data.error || "Failed to create operation.");
-      return;
-    }
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to create operation.");
+      }
 
-    const nextOperation = data.operation as Operation;
+      const nextOperation = data.operation as Operation;
 
-    setOperation(nextOperation);
-    setSelectedRecommendationId(nextOperation.recommendations[0]?.id ?? null);
+      setOperation(nextOperation);
+      setSelectedRecommendationId(nextOperation.recommendations[0]?.id ?? null);
+      setExecutionMessage("");
+      setPlanningLoading(false);
 
-    if (nextOperation.type === "spotify" || nextOperation.type === "playlist") {
+      if (nextOperation.type === "spotify" || nextOperation.type === "playlist") {
+        scheduleLog(
+          300,
+          "research",
+          "Broad music research complete. Spotify-ready track seeds prepared.",
+          "done"
+        );
+      } else {
+        scheduleLog(300, "research", "Research plan complete.", "done");
+      }
+
       scheduleLog(
-        300,
-        "research",
-        "Broad music research complete. Spotify-ready track seeds prepared.",
+        700,
+        "planning",
+        "Approval layer is ready. No external action will run without confirmation.",
         "done"
       );
-    } else if (nextOperation.type === "trip" || nextOperation.type === "flight") {
-      scheduleLog(300, "research", "Flight-only Trip.com planning complete.", "done");
-    } else {
-      scheduleLog(300, "research", "Research plan complete.", "done");
-    }
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : "Failed to create operation.";
 
-    scheduleLog(
-      700,
-      "planning",
-      "Approval layer is ready. No external action will run without confirmation.",
-      "done"
-    );
+      setPlanningLoading(false);
+      setExecutionMessage(errorMessage);
+      pushLog("kuro", errorMessage, "error");
+    }
   }
 
   function handleReset() {
@@ -482,6 +481,7 @@ export default function KuroHome() {
     setMessage("");
     setOperation(null);
     setSelectedRecommendationId(null);
+    setPlanningLoading(false);
     setExecuting(false);
     setExecutionComplete(false);
     setExecutionMessage("");
@@ -543,7 +543,7 @@ export default function KuroHome() {
     scheduleLog(350, "browser", "Creating Spotify playlist through the Spotify API.");
     scheduleLog(900, "browser", "Preparing direct browser-to-localhost agent handoff.");
     scheduleLog(1400, "browser", `Local target: ${LOCAL_BROWSER_AGENT_URL}`);
-    scheduleLog(2100, "browser", `First Exa track seed: ${trackSeeds[0]}`);
+    scheduleLog(2100, "browser", `First track seed: ${trackSeeds[0]}`);
 
     try {
       const playlistResponse = await fetch("/api/spotify/create-playlist", {
@@ -612,28 +612,6 @@ export default function KuroHome() {
         status: "running",
       });
 
-      const statusOne = window.setTimeout(() => {
-        setBrowserStatus({
-          connected: true,
-          surface: "Spotify",
-          currentAction: "Opening playlist in persistent Chrome",
-          target: playlistUrl,
-          status: "running",
-        });
-      }, 900);
-
-      const statusTwo = window.setTimeout(() => {
-        setBrowserStatus({
-          connected: true,
-          surface: "Spotify",
-          currentAction: "Searching Exa-researched tracks and pressing Add",
-          target: `${trackSeeds.length} track seeds`,
-          status: "running",
-        });
-      }, 2000);
-
-      timeoutRefs.current.push(statusOne, statusTwo);
-
       const agentResponse = await fetch(
         `${LOCAL_BROWSER_AGENT_URL}/spotify/browser-add-tracks`,
         {
@@ -677,21 +655,21 @@ export default function KuroHome() {
       pushLog("browser", agentData.message || "Spotify playlist created successfully.", "done");
       pushLog("kuro", "Playlist mission complete.", "done");
     } catch (error) {
-      const message =
+      const errorMessage =
         error instanceof Error ? error.message : "Failed to create Spotify playlist.";
 
-      setExecutionMessage(message);
+      setExecutionMessage(errorMessage);
       setExecuting(false);
 
       setBrowserStatus({
         connected: false,
         surface: "Spotify",
-        currentAction: message,
+        currentAction: errorMessage,
         target: LOCAL_BROWSER_AGENT_URL,
         status: "error",
       });
 
-      pushLog("browser", message, "error");
+      pushLog("browser", errorMessage, "error");
     }
   }
 
@@ -716,18 +694,17 @@ export default function KuroHome() {
       connected: false,
       surface: "Trip.com",
       currentAction: "Calling localhost:4000 directly from your browser",
-      target: "http://localhost:4000/trip/open-flight",
+      target: `${LOCAL_BROWSER_AGENT_URL}/trip/open-flight`,
       status: "running",
     });
 
     pushLog("approval", "Human approval received for Trip.com flight workflow.", "done");
-    scheduleLog(350, "browser", "Connecting to local browser agent on localhost:4000.");
-    scheduleLog(900, "browser", "Opening Trip.com in persistent Chrome.");
-    scheduleLog(1400, "browser", "Finding matching flight row by airline, time, route, and price.");
-    scheduleLog(2000, "browser", "Clicking Select / View Details for the selected option.");
+    scheduleLog(350, "browser", "Opening Trip.com in persistent Chrome.");
+    scheduleLog(1000, "browser", "Matching airline, price, route, and timing.");
+    scheduleLog(1700, "browser", "Clicking Select / View Details for the selected option.");
 
     try {
-      const response = await fetch("http://localhost:4000/trip/open-flight", {
+      const response = await fetch(`${LOCAL_BROWSER_AGENT_URL}/trip/open-flight`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -763,23 +740,23 @@ export default function KuroHome() {
       pushLog("browser", data.message || "Matching Trip.com flight selected.", "done");
       pushLog("kuro", "Trip.com selection complete. Ready for next step.", "done");
     } catch (error) {
-      const message =
+      const errorMessage =
         error instanceof Error
           ? error.message
           : "Failed to open Trip.com with local browser agent.";
 
-      setExecutionMessage(message);
+      setExecutionMessage(errorMessage);
       setExecuting(false);
 
       setBrowserStatus({
         connected: false,
         surface: "Trip.com",
-        currentAction: message,
-        target: "localhost:4000",
+        currentAction: errorMessage,
+        target: LOCAL_BROWSER_AGENT_URL,
         status: "error",
       });
 
-      pushLog("browser", message, "error");
+      pushLog("browser", errorMessage, "error");
     }
   }
 
@@ -838,7 +815,7 @@ export default function KuroHome() {
             <div className="rounded-[2rem] border border-white/10 bg-white/[0.035] p-6 backdrop-blur-xl">
               <div className="flex items-start justify-between gap-4">
                 <KuroMascot
-                  status={executing ? "executing" : executionComplete ? "idle" : "thinking"}
+                  status={planningLoading || executing ? "executing" : executionComplete ? "idle" : "thinking"}
                   small
                 />
 
@@ -865,15 +842,25 @@ export default function KuroHome() {
                       Recommendations
                     </p>
                     <span className="rounded-full bg-white/10 px-3 py-1 text-xs text-white/45">
-                      {executionComplete ? "Completed" : executing ? "Executing" : "Ready"}
+                      {planningLoading
+                        ? "Searching"
+                        : executionComplete
+                          ? "Completed"
+                          : executing
+                            ? "Executing"
+                            : "Ready"}
                     </span>
                   </div>
 
-                  <RecommendationGrid
-                    recommendations={operation.recommendations}
-                    selectedId={selectedRecommendationId}
-                    onSelect={setSelectedRecommendationId}
-                  />
+                  {planningLoading ? (
+                    <TravelLoadingPanel />
+                  ) : (
+                    <RecommendationGrid
+                      recommendations={operation.recommendations}
+                      selectedId={selectedRecommendationId}
+                      onSelect={setSelectedRecommendationId}
+                    />
+                  )}
                 </section>
 
                 <aside className="rounded-[1.75rem] border border-white/10 bg-black/40 p-5">
@@ -881,7 +868,22 @@ export default function KuroHome() {
                     Operating model
                   </p>
 
-                  {!selectedRecommendation ? (
+                  {planningLoading ? (
+                    <>
+                      <h3 className="mt-3 text-2xl font-semibold">
+                        Kuro Travel Agent is working
+                      </h3>
+                      <p className="mt-3 text-sm leading-relaxed text-white/45">
+                        Reading live Trip.com results and preparing 3 ranked options with real price, time, airline, and route.
+                      </p>
+                      <div className="mt-5 space-y-3">
+                        <LoadingStep text="Parsing destination and origin" done />
+                        <LoadingStep text="Opening Trip.com live search" done />
+                        <LoadingStep text="Reading visible flight rows" active />
+                        <LoadingStep text="Ranking by price and timing" />
+                      </div>
+                    </>
+                  ) : !selectedRecommendation ? (
                     <>
                       <h3 className="mt-3 text-2xl font-semibold">
                         Research. Recommend. Approve. Execute.
@@ -910,19 +912,6 @@ export default function KuroHome() {
                             value={`${selectedRecommendation.playlistDetails.trackSeeds.length} seeds`}
                             strong
                           />
-
-                          <div className="rounded-2xl bg-white/[0.04] px-4 py-3">
-                            <p className="text-xs text-white/35">Track seeds</p>
-                            <div className="mt-2 space-y-1">
-                              {selectedRecommendation.playlistDetails.trackSeeds
-                                .slice(0, 6)
-                                .map((track: string) => (
-                                  <p key={track} className="text-xs text-white/65">
-                                    • {track}
-                                  </p>
-                                ))}
-                            </div>
-                          </div>
                         </div>
                       )}
 
@@ -943,18 +932,22 @@ export default function KuroHome() {
                           />
                           <Detail
                             label="Time"
-                            value={selectedRecommendation.flightDetails.departureTime}
+                            value={`${selectedRecommendation.flightDetails.departureTime} → ${selectedRecommendation.flightDetails.arrivalTime || ""}`}
                           />
-                          <Detail label="Source" value="Trip.com flights only" />
+                          <Detail
+                            label="Stops"
+                            value={selectedRecommendation.flightDetails.stops || "Live result"}
+                          />
+                          <Detail label="Source" value="Trip.com live scrape" />
                         </div>
                       )}
 
                       <div className="mt-5 rounded-3xl border border-white/10 bg-white/[0.04] p-4">
                         <p className="text-xs leading-relaxed text-white/45">
                           {isSpotifyOperation
-                            ? "Kuro will create the Spotify playlist, then your browser will call localhost:4000 directly to open Chrome, search each Exa-researched track, and press Add."
+                            ? "Kuro will create the Spotify playlist, then call localhost:4000 to open Chrome, search each track, and press Add."
                             : isTripOperation
-                              ? "Kuro will open Trip.com for this flight option. It will stop before payment or final booking confirmation."
+                              ? "Kuro will open Trip.com, match this exact live flight row, and click Select / View Details. It will stop before payment."
                               : "Kuro will prepare this mission safely and wait for your next instruction."}
                         </p>
                       </div>
@@ -989,7 +982,7 @@ export default function KuroHome() {
                   logs={logs}
                   browserStatus={browserStatus}
                   elapsedSeconds={elapsedSeconds}
-                  executing={executing}
+                  executing={planningLoading || executing}
                   completed={executionComplete}
                 />
               </div>
@@ -1013,7 +1006,8 @@ export default function KuroHome() {
             />
             <button
               onClick={handleSubmit}
-              className="flex h-9 w-9 items-center justify-center rounded-full bg-white text-black transition hover:scale-105"
+              disabled={planningLoading || executing}
+              className="flex h-9 w-9 items-center justify-center rounded-full bg-white text-black transition hover:scale-105 disabled:opacity-40"
             >
               <ArrowUp className="h-4 w-4" />
             </button>
@@ -1021,6 +1015,71 @@ export default function KuroHome() {
         </div>
       </section>
     </main>
+  );
+}
+
+function TravelLoadingPanel() {
+  return (
+    <div className="rounded-[1.75rem] border border-white/10 bg-white/[0.04] p-6">
+      <div className="flex items-center gap-4">
+        <div className="relative h-12 w-12">
+          <div className="absolute inset-0 rounded-full border border-white/10" />
+          <div className="absolute inset-0 animate-spin rounded-full border-2 border-white border-t-transparent" />
+        </div>
+
+        <div>
+          <h3 className="text-xl font-semibold">Searching live Trip.com results</h3>
+          <p className="mt-1 text-sm text-white/45">
+            Kuro is retrieving real airline, time, route, and price details.
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-6 grid gap-3">
+        <SkeletonFlightCard />
+        <SkeletonFlightCard />
+        <SkeletonFlightCard />
+      </div>
+    </div>
+  );
+}
+
+function SkeletonFlightCard() {
+  return (
+    <div className="rounded-3xl border border-white/10 bg-black/30 p-5">
+      <div className="flex items-center justify-between gap-4">
+        <div className="h-5 w-28 animate-pulse rounded-full bg-white/10" />
+        <div className="h-7 w-24 animate-pulse rounded-full bg-white/10" />
+      </div>
+      <div className="mt-5 grid grid-cols-3 gap-4">
+        <div className="h-12 animate-pulse rounded-2xl bg-white/10" />
+        <div className="h-12 animate-pulse rounded-2xl bg-white/10" />
+        <div className="h-12 animate-pulse rounded-2xl bg-white/10" />
+      </div>
+    </div>
+  );
+}
+
+function LoadingStep({
+  text,
+  done = false,
+  active = false,
+}: {
+  text: string;
+  done?: boolean;
+  active?: boolean;
+}) {
+  return (
+    <div className="flex items-center gap-3 rounded-2xl bg-white/[0.04] px-4 py-3 text-xs">
+      <span
+        className={`h-2.5 w-2.5 rounded-full ${
+          done ? "bg-green-300" : active ? "animate-pulse bg-white" : "bg-white/20"
+        }`}
+      />
+      <span className={done || active ? "text-white/75" : "text-white/35"}>
+        {text}
+      </span>
+    </div>
   );
 }
 
