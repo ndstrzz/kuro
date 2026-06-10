@@ -1,3 +1,18 @@
-2026/06/10-09:12:24.442 d12b8 Reusing MANIFEST /Users/nd/Desktop/kuro/kuro-browser-agent/.kuro-trip-chrome-profile/Default/Session Storage/MANIFEST-000001
-2026/06/10-09:12:24.444 d12b8 Recovering log #3
-2026/06/10-09:12:24.445 d12b8 Reusing old log /Users/nd/Desktop/kuro/kuro-browser-agent/.kuro-trip-chrome-profile/Default/Session Storage/000003.log 
+2026/06/10-09:47:57.251 dbf9b Reusing MANIFEST /Users/nd/Desktop/kuro/kuro-browser-agent/.kuro-trip-chrome-profile/Default/Session Storage/MANIFEST-000001
+2026/06/10-09:47:57.252 dbf9b Recovering log #13
+2026/06/10-09:47:57.252 dbf9b Reusing old log /Users/nd/Desktop/kuro/kuro-browser-agent/.kuro-trip-chrome-profile/Default/Session Storage/000013.log 
+2026/06/10-09:48:44.642 dbf9e Level-0 table #17: started
+2026/06/10-09:48:44.646 dbf9e Level-0 table #17: 23151 bytes OK
+2026/06/10-09:48:44.649 dbf9e Delete type=0 #13
+2026/06/10-09:48:44.649 dbf9b Compacting 4@0 + 1@1 files
+2026/06/10-09:48:44.652 dbf9b Generated table #18@0: 244 keys, 24888 bytes
+2026/06/10-09:48:44.652 dbf9b Compacted 4@0 + 1@1 files => 24888 bytes
+2026/06/10-09:48:44.653 dbf9b compacted to: files[ 0 1 1 0 0 0 0 ]
+2026/06/10-09:48:44.654 dbf9b Delete type=2 #14
+2026/06/10-09:48:44.654 dbf9b Delete type=2 #17
+2026/06/10-09:48:44.654 dbf9b Delete type=2 #7
+2026/06/10-09:48:44.654 dbf9b Delete type=2 #12
+2026/06/10-09:48:44.654 dbf9b Delete type=2 #9
+2026/06/10-09:50:11.737 dbf9e Level-0 table #20: started
+2026/06/10-09:50:11.739 dbf9e Level-0 table #20: 22716 bytes OK
+2026/06/10-09:50:11.740 dbf9e Delete type=0 #16

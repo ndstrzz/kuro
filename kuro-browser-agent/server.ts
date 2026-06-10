@@ -28,43 +28,71 @@ app.use(
   })
 );
 
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({ limit: "2mb" }));
 
-type FlightSearchRequest = {
-  prompt: string;
-  timezone?: string;
-  userLocation?: {
-    city?: string;
-    country?: string;
-  };
+type EmailUrgency = "urgent" | "important" | "normal";
+
+type EmailItem = {
+  id: string;
+  from: string;
+  subject: string;
+  snippet: string;
+  receivedAt?: string;
+  unread?: boolean;
 };
 
-type ParsedRoute = {
-  originCity: string;
-  originAirport: string;
-  originSlug: string;
-  destinationCity: string;
-  destinationAirport: string;
-  destinationSlug: string;
-  dateText: string;
-  priority: "cheapest" | "direct" | "balanced";
+type EmailSummary = {
+  id: string;
+  from: string;
+  subject: string;
+  receivedAt: string;
+  unread: boolean;
+  label: string;
+  urgency: EmailUrgency;
+  summary: string;
+  suggestedAction: string;
 };
 
-type ScrapedFlight = {
+type GmailBriefRequest = {
+  prompt?: string;
+  emails?: EmailItem[];
+};
+
+type DraftReplyRequest = {
+  email?: EmailItem;
+  tone?: "professional" | "warm" | "short" | "formal";
+  instruction?: string;
+};
+
+type DesktopPlanStep = {
+  id: string;
   title: string;
-  tag: string;
   description: string;
-  price: string;
-  route: string;
-  airline: string;
-  departureTime: string;
-  arrivalTime: string;
-  departureTerminal: string;
-  arrivalTerminal: string;
-  duration: string;
-  stops: string;
-  tripUrl: string;
+  action:
+    | "open_url"
+    | "open_gmail"
+    | "open_calendar"
+    | "search_web"
+    | "extract_text"
+    | "wait_for_user";
+  value?: string;
+  requiresApproval?: boolean;
+  safetyLevel: "safe" | "approval_required" | "blocked";
 };
+
+type DesktopPlanRequest = {
+  prompt: string;
+};
+
+type DesktopExecuteRequest = {
+  prompt?: string;
+  url?: string;
+  query?: string;
+  plan?: DesktopPlanStep[];
+};
+
+let desktopContext: Awaited<ReturnType<typeof chromium.launchPersistentContext>> | null =
+  null;
 
 async function isVisible(locator: Locator, timeout = 1500) {
   return locator.isVisible({ timeout }).catch(() => false);
@@ -78,9 +106,238 @@ function normaliseLower(value: string) {
   return normalise(value).toLowerCase();
 }
 
-function numberFromPrice(price: string) {
-  const match = price.replace(/,/g, "").match(/\d+/);
-  return match ? Number(match[0]) : Number.MAX_SAFE_INTEGER;
+/* ----------------------------- Desktop Agent ----------------------------- */
+
+function isDangerousPrompt(prompt: string) {
+  const text = normaliseLower(prompt);
+
+  return [
+    "send email",
+    "send this email",
+    "delete",
+    "trash",
+    "pay",
+    "payment",
+    "buy",
+    "purchase",
+    "submit",
+    "confirm order",
+    "transfer money",
+    "install",
+    "remove file",
+  ].some((word) => text.includes(word));
+}
+
+function inferUrlFromPrompt(prompt: string) {
+  const text = normaliseLower(prompt);
+
+  if (text.includes("gmail") || text.includes("email")) {
+    return "https://mail.google.com";
+  }
+
+  if (text.includes("calendar")) {
+    return "https://calendar.google.com";
+  }
+
+  if (text.includes("spotify")) {
+    return "https://open.spotify.com";
+  }
+
+  if (text.includes("chatgpt")) {
+    return "https://chatgpt.com";
+  }
+
+  if (text.includes("google")) {
+    return "https://www.google.com";
+  }
+
+  return "https://www.google.com";
+}
+
+function buildDesktopPlan(prompt: string): DesktopPlanStep[] {
+  const text = normaliseLower(prompt);
+  const dangerous = isDangerousPrompt(prompt);
+  const steps: DesktopPlanStep[] = [];
+
+  steps.push({
+    id: "step_001",
+    title: "Understand request",
+    description: "Kuro will analyse the request and decide which app or website to open.",
+    action: "wait_for_user",
+    safetyLevel: "safe",
+  });
+
+  if (text.includes("gmail") || text.includes("email") || text.includes("inbox")) {
+    steps.push({
+      id: "step_002",
+      title: "Open Gmail",
+      description: "Kuro will open Gmail in a controlled browser window.",
+      action: "open_gmail",
+      value: "https://mail.google.com",
+      safetyLevel: "safe",
+    });
+
+    steps.push({
+      id: "step_003",
+      title: "Read visible inbox content",
+      description: "Kuro will only read visible page text and prepare a summary.",
+      action: "extract_text",
+      safetyLevel: "safe",
+    });
+  } else if (text.includes("calendar") || text.includes("schedule")) {
+    steps.push({
+      id: "step_002",
+      title: "Open Google Calendar",
+      description: "Kuro will open Google Calendar so the user can review the schedule.",
+      action: "open_calendar",
+      value: "https://calendar.google.com",
+      safetyLevel: "safe",
+    });
+  } else if (text.includes("search") || text.includes("research") || text.includes("find")) {
+    const query = prompt
+      .replace(/open/gi, "")
+      .replace(/search/gi, "")
+      .replace(/research/gi, "")
+      .replace(/find/gi, "")
+      .trim();
+
+    steps.push({
+      id: "step_002",
+      title: "Search the web",
+      description: "Kuro will open Google and search the requested topic.",
+      action: "search_web",
+      value: query || prompt,
+      safetyLevel: "safe",
+    });
+  } else {
+    steps.push({
+      id: "step_002",
+      title: "Open relevant workspace",
+      description: "Kuro will open the most relevant website for the request.",
+      action: "open_url",
+      value: inferUrlFromPrompt(prompt),
+      safetyLevel: "safe",
+    });
+  }
+
+  steps.push({
+    id: "step_999",
+    title: dangerous ? "Final approval required" : "Stop before sensitive actions",
+    description: dangerous
+      ? "This request contains sending, deleting, purchasing, submitting, or payment behaviour. Kuro will stop before that action."
+      : "Kuro will not send, delete, purchase, submit, or pay without another approval.",
+    action: "wait_for_user",
+    requiresApproval: true,
+    safetyLevel: dangerous ? "approval_required" : "safe",
+  });
+
+  return steps;
+}
+
+async function getDesktopPage() {
+  const userDataDir = path.join(process.cwd(), ".kuro-desktop-agent-profile");
+
+  if (!desktopContext) {
+    desktopContext = await chromium.launchPersistentContext(userDataDir, {
+      channel: "chrome",
+      headless: false,
+      slowMo: 120,
+      viewport: {
+        width: 1440,
+        height: 950,
+      },
+      args: [
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+        "--disable-software-rasterizer",
+        "--start-maximized",
+      ],
+    });
+  }
+
+  return desktopContext.pages()[0] || (await desktopContext.newPage());
+}
+
+async function executeDesktopStep(page: Page, step: DesktopPlanStep) {
+  if (step.safetyLevel === "blocked") {
+    return {
+      step,
+      success: false,
+      blocked: true,
+      message: "This action is blocked for safety.",
+    };
+  }
+
+  if (
+    step.action === "wait_for_user" ||
+    step.requiresApproval ||
+    step.safetyLevel === "approval_required"
+  ) {
+    return {
+      step,
+      success: true,
+      waitingForUser: true,
+      message: "Kuro stopped and is waiting for user approval.",
+    };
+  }
+
+  if (step.action === "open_url" || step.action === "open_gmail" || step.action === "open_calendar") {
+    const url = step.value || "https://www.google.com";
+
+    await page.goto(url, {
+      waitUntil: "domcontentloaded",
+      timeout: 60000,
+    });
+
+    await page.waitForTimeout(3000);
+
+    return {
+      step,
+      success: true,
+      url: page.url(),
+      message: `Kuro opened ${url}.`,
+    };
+  }
+
+  if (step.action === "search_web") {
+    const query = step.value || "Kuro AI executive assistant";
+
+    await page.goto("https://www.google.com/search?q=" + encodeURIComponent(query), {
+      waitUntil: "domcontentloaded",
+      timeout: 60000,
+    });
+
+    await page.waitForTimeout(3000);
+
+    return {
+      step,
+      success: true,
+      url: page.url(),
+      message: `Kuro searched Google for "${query}".`,
+    };
+  }
+
+  if (step.action === "extract_text") {
+    await page.waitForTimeout(2000);
+
+    const pageText = await page
+      .locator("body")
+      .innerText({ timeout: 5000 })
+      .catch(() => "");
+
+    return {
+      step,
+      success: true,
+      extractedText: pageText.slice(0, 4000),
+      message: "Kuro extracted the visible page text.",
+    };
+  }
+
+  return {
+    step,
+    success: false,
+    message: "Unsupported desktop action.",
+  };
 }
 
 /* ----------------------------- Spotify helpers ----------------------------- */
@@ -125,9 +382,7 @@ async function findPlaylistSearchInput(page: Page) {
   ];
 
   for (const candidate of candidates) {
-    if (await isVisible(candidate, 2500)) {
-      return candidate;
-    }
+    if (await isVisible(candidate, 2500)) return candidate;
   }
 
   return null;
@@ -268,462 +523,216 @@ async function waitForSpotifyLogin(page: Page) {
   await page.waitForTimeout(40000);
 }
 
-/* ----------------------------- Trip helpers ----------------------------- */
+/* ----------------------------- Gmail helpers ----------------------------- */
 
-const cityMap: Record<string, { city: string; airport: string; slug: string }> = {
-  singapore: { city: "Singapore", airport: "SIN", slug: "singapore" },
-  jakarta: { city: "Jakarta", airport: "CGK", slug: "jakarta" },
-  "new york": { city: "New York", airport: "NYC", slug: "new-york" },
-  nyc: { city: "New York", airport: "NYC", slug: "new-york" },
-  london: { city: "London", airport: "LON", slug: "london" },
-  tokyo: { city: "Tokyo", airport: "TYO", slug: "tokyo" },
-  bangkok: { city: "Bangkok", airport: "BKK", slug: "bangkok" },
-  seoul: { city: "Seoul", airport: "SEL", slug: "seoul" },
-  bali: { city: "Bali", airport: "DPS", slug: "bali" },
-  taipei: { city: "Taipei", airport: "TPE", slug: "taipei" },
-  shanghai: { city: "Shanghai", airport: "SHA", slug: "shanghai" },
-  beijing: { city: "Beijing", airport: "BJS", slug: "beijing" },
-  hongkong: { city: "Hong Kong", airport: "HKG", slug: "hong-kong" },
-  "hong kong": { city: "Hong Kong", airport: "HKG", slug: "hong-kong" },
-  paris: { city: "Paris", airport: "PAR", slug: "paris" },
-  sydney: { city: "Sydney", airport: "SYD", slug: "sydney" },
-};
+const demoInbox: EmailItem[] = [
+  {
+    id: "mail_001",
+    from: "OCBC Hackathon Team <events@ocbc.com>",
+    subject: "Final hackathon briefing and demo schedule",
+    snippet:
+      "Please prepare your demo flow and arrive before the morning registration. Final judging will begin after lunch.",
+    receivedAt: "Today, 8:20 AM",
+    unread: true,
+  },
+  {
+    id: "mail_002",
+    from: "Client Success <client@example.com>",
+    subject: "Re: Proposal confirmation",
+    snippet:
+      "Thanks for sending this over. Could you confirm the final delivery timeline and next steps by today?",
+    receivedAt: "Today, 9:05 AM",
+    unread: true,
+  },
+  {
+    id: "mail_003",
+    from: "Stripe <support@stripe.com>",
+    subject: "Payment integration checklist",
+    snippet:
+      "Your Stripe account is almost ready. Complete the remaining checklist items before going live.",
+    receivedAt: "Yesterday, 6:12 PM",
+    unread: false,
+  },
+  {
+    id: "mail_004",
+    from: "Notion <team@notion.so>",
+    subject: "Your weekly workspace summary",
+    snippet:
+      "Here is what changed in your workspace this week.",
+    receivedAt: "Yesterday, 11:40 AM",
+    unread: false,
+  },
+];
 
-function detectCityFromPrompt(prompt: string) {
-  const text = normaliseLower(prompt);
+function getEmails(input?: EmailItem[]) {
+  if (Array.isArray(input) && input.length > 0) return input;
+  return demoInbox;
+}
 
-  for (const [key, value] of Object.entries(cityMap)) {
-    if (text.includes(key)) return value;
+function classifyEmail(email: EmailItem) {
+  const text = `${email.from} ${email.subject} ${email.snippet}`.toLowerCase();
+
+  if (
+    text.includes("urgent") ||
+    text.includes("deadline") ||
+    text.includes("today") ||
+    text.includes("confirm") ||
+    text.includes("action required") ||
+    text.includes("demo") ||
+    text.includes("briefing")
+  ) {
+    return "High Priority";
   }
 
-  const toMatch = text.match(
-    /\bto\s+([a-z\s]+?)(?:\s+tonight|\s+today|\s+tomorrow|\s+next|\s+cheapest|\s+direct|$)/i
-  );
-
-  const rawCity = toMatch?.[1]?.trim();
-
-  if (rawCity) {
-    return {
-      city: rawCity
-        .split(" ")
-        .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-        .join(" "),
-      airport: rawCity.slice(0, 3).toUpperCase(),
-      slug: rawCity.toLowerCase().replace(/\s+/g, "-"),
-    };
+  if (
+    text.includes("invoice") ||
+    text.includes("payment") ||
+    text.includes("stripe") ||
+    text.includes("receipt")
+  ) {
+    return "Finance";
   }
 
-  return cityMap.jakarta;
-}
-
-function detectOriginFromPrompt(
-  prompt: string,
-  requestLocation?: FlightSearchRequest["userLocation"]
-) {
-  const text = normaliseLower(prompt);
-  const fromMatch = text.match(/\bfrom\s+([a-z\s]+?)\s+to\b/i);
-  const rawOrigin = fromMatch?.[1]?.trim();
-
-  if (rawOrigin) {
-    for (const [key, value] of Object.entries(cityMap)) {
-      if (rawOrigin.includes(key)) return value;
-    }
+  if (
+    text.includes("proposal") ||
+    text.includes("client") ||
+    text.includes("meeting") ||
+    text.includes("timeline")
+  ) {
+    return "Client";
   }
 
-  const country = requestLocation?.country?.toUpperCase();
-  const city = requestLocation?.city?.toLowerCase();
-
-  if (country === "SG" || city?.includes("singapore")) {
-    return cityMap.singapore;
+  if (
+    text.includes("newsletter") ||
+    text.includes("weekly") ||
+    text.includes("summary") ||
+    text.includes("workspace")
+  ) {
+    return "Low Priority";
   }
 
-  return cityMap.singapore;
+  return "General";
 }
 
-function parseFlightPrompt(body: FlightSearchRequest): ParsedRoute {
-  const prompt = body.prompt || "";
-  const text = normaliseLower(prompt);
-  const origin = detectOriginFromPrompt(prompt, body.userLocation);
-  const destination = detectCityFromPrompt(prompt);
-
-  return {
-    originCity: origin.city,
-    originAirport: origin.airport,
-    originSlug: origin.slug,
-    destinationCity: destination.city,
-    destinationAirport: destination.airport,
-    destinationSlug: destination.slug,
-    dateText: text.includes("tonight")
-      ? "tonight"
-      : text.includes("today")
-        ? "today"
-        : text.includes("tomorrow")
-          ? "tomorrow"
-          : "next available",
-    priority: text.includes("direct")
-      ? "direct"
-      : text.includes("cheapest") || text.includes("cheap")
-        ? "cheapest"
-        : "balanced",
-  };
-}
-
-function buildTripUrl(route: ParsedRoute) {
-  return `https://www.trip.com/flights/${route.originSlug}-to-${route.destinationSlug}/airfares-${route.originAirport.toLowerCase()}-${route.destinationAirport.toLowerCase()}/`;
-}
-
-function attachFlightDetails(baseUrl: string, flight: Omit<ScrapedFlight, "tripUrl">) {
-  const url = new URL(baseUrl);
-
-  url.searchParams.set("kuroAirline", flight.airline);
-  url.searchParams.set("kuroDepartureTime", flight.departureTime);
-  url.searchParams.set("kuroArrivalTime", flight.arrivalTime);
-  url.searchParams.set("kuroPrice", flight.price);
-  url.searchParams.set("kuroRoute", flight.route);
-  url.searchParams.set("kuroStops", flight.stops);
-
-  return url.toString();
-}
-
-function removeKuroParams(rawUrl: string) {
-  const url = new URL(rawUrl);
-
-  [
-    "kuroAirline",
-    "kuroDepartureTime",
-    "kuroArrivalTime",
-    "kuroPrice",
-    "kuroRoute",
-    "kuroStops",
-    "kuroOrigin",
-    "kuroDestination",
-    "kuroDate",
-    "kuroTripType",
-  ].forEach((key) => url.searchParams.delete(key));
-
-  return url.toString();
-}
-
-async function closeTripPopups(page: Page) {
-  const buttons = [
-    page.getByRole("button", { name: /close/i }).first(),
-    page.locator('[aria-label="Close"]').first(),
-    page.locator("button").filter({ hasText: /^×$/ }).first(),
-    page.locator("button").filter({ hasText: /^No thanks$/i }).first(),
-    page.locator("button").filter({ hasText: /^Not now$/i }).first(),
-  ];
-
-  for (const button of buttons) {
-    if (await isVisible(button, 1000)) {
-      await button.click({ timeout: 2000 }).catch(() => null);
-      await page.waitForTimeout(800);
-    }
-  }
-}
-
-async function fillTripTextbox(page: Page, label: RegExp, value: string) {
-  const candidates = [
-    page.getByRole("textbox", { name: label }).first(),
-    page.getByPlaceholder(label).first(),
-    page.locator("input").filter({ hasText: label }).first(),
-  ];
-
-  for (const candidate of candidates) {
-    if (await isVisible(candidate, 1500)) {
-      await candidate.click({ timeout: 3000 }).catch(() => null);
-      await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
-      await page.keyboard.press("Backspace");
-      await candidate.fill(value, { timeout: 3000 }).catch(() => null);
-      await page.waitForTimeout(1000);
-      await page.keyboard.press("Enter").catch(() => null);
-      await page.waitForTimeout(800);
-      return true;
-    }
-  }
-
-  return false;
-}
-
-async function tryFillTripSearchForm(page: Page, route: ParsedRoute) {
-  await closeTripPopups(page);
-
-  const bodyText = await page.locator("body").innerText({ timeout: 4000 }).catch(() => "");
-
-  const likelySearchForm =
-    /from|to|depart|departure|search/i.test(bodyText) &&
-    !/select|view details|sgd|usd|nonstop/i.test(bodyText);
-
-  if (!likelySearchForm) {
-    return false;
-  }
-
-  console.log("Trip.com appears to show a search form. Trying to fill it.");
-
-  await fillTripTextbox(page, /from|origin|departure/i, route.originCity);
-  await fillTripTextbox(page, /^to$|destination|arrival/i, route.destinationCity);
-
-  const searchButtons = [
-    page.getByRole("button", { name: /search/i }).first(),
-    page.locator('button:has-text("Search")').first(),
-    page.locator('[role="button"]:has-text("Search")').first(),
-  ];
-
-  for (const button of searchButtons) {
-    if (await isVisible(button, 2500)) {
-      await button.click({ timeout: 5000 }).catch(() => null);
-      await page.waitForTimeout(9000);
-      await closeTripPopups(page);
-      return true;
-    }
-  }
-
-  return false;
-}
-
-function parseFlightRow(
-  text: string,
-  route: ParsedRoute,
-  tripUrl: string,
-  index: number
-): ScrapedFlight | null {
-  const cleaned = normalise(text);
-
-  if (!cleaned.match(/select|view details|book/i)) return null;
-
-  const price = cleaned.match(/(?:SGD|USD|S\$|US\$)\s?[\d,]+/i)?.[0];
-  const times = cleaned.match(/\d{1,2}:\d{2}\s?(?:AM|PM)/gi) || [];
-  const duration = cleaned.match(/\d+h\s*\d*m|\d+h|\d+\s*h\s+\d+\s*m/i)?.[0];
-  const stops = cleaned.match(/nonstop|direct|\d+\s*stop[s]?/i)?.[0];
-
-  if (!price || times.length < 2) return null;
-
-  const lines = text
-    .split("\n")
-    .map((line) => normalise(line))
-    .filter(Boolean);
-
-  const badLine =
-    /select|view details|round-trip|one-way|exclusive fare|cheapest|sgd|usd|nonstop|direct|\d+h|\d{1,2}:\d{2}|t\d|from|to/i;
-
-  const airline =
-    lines.find((line) => !badLine.test(line) && line.length >= 2 && line.length <= 35) ||
-    "Trip.com result";
-
-  const terminals = lines.filter((line) =>
-    new RegExp(`${route.originAirport}|${route.destinationAirport}|T\\d`, "i").test(line)
-  );
-
-  const departureTerminal =
-    terminals.find((line) => line.toUpperCase().includes(route.originAirport)) ||
-    route.originAirport;
-
-  const arrivalTerminal =
-    terminals.find((line) => line.toUpperCase().includes(route.destinationAirport)) ||
-    route.destinationAirport;
-
-  const baseFlight = {
-    title:
-      index === 0
-        ? `${route.destinationCity} Cheapest Flight`
-        : `${route.destinationCity} Option ${index + 1}`,
-    tag: index === 0 ? "CHEAPEST" : index === 1 ? "BALANCED" : "CONVENIENT",
-    description:
-      "Kuro scraped this live Trip.com result and will select the exact matching row when approved.",
-    price,
-    route: `${route.originAirport} → ${route.destinationAirport}`,
-    airline,
-    departureTime: times[0] || "Check live timing",
-    arrivalTime: times[1] || "Check live timing",
-    departureTerminal,
-    arrivalTerminal,
-    duration: duration || "Check duration",
-    stops: stops || "Check stops",
-  };
-
-  return {
-    ...baseFlight,
-    tripUrl: attachFlightDetails(tripUrl, baseFlight),
-  };
-}
-
-async function scrapeVisibleTripFlights(page: Page, route: ParsedRoute, tripUrl: string) {
-  await closeTripPopups(page);
-  await page.waitForTimeout(5000);
-
-  let rowCandidates = page.locator("div").filter({
-    hasText: /SGD|USD|S\$|US\$/i,
-  });
-
-  let count = await rowCandidates.count().catch(() => 0);
-
-  if (count < 2) {
-    rowCandidates = page.locator("div").filter({
-      hasText: /select|view details|book/i,
-    });
-
-    count = await rowCandidates.count().catch(() => 0);
-  }
-
-  const flights: ScrapedFlight[] = [];
-  const seen = new Set<string>();
-
-  for (let index = 0; index < Math.min(count, 220); index += 1) {
-    const row = rowCandidates.nth(index);
-
-    if (!(await isVisible(row, 500))) continue;
-
-    const text = await row.innerText({ timeout: 1000 }).catch(() => "");
-    const flight = parseFlightRow(text, route, tripUrl, flights.length);
-
-    if (!flight) continue;
-
-    const key = `${flight.airline}-${flight.departureTime}-${flight.arrivalTime}-${flight.price}`;
-
-    if (seen.has(key)) continue;
-
-    seen.add(key);
-    flights.push(flight);
-
-    if (flights.length >= 8) break;
-  }
-
-  return flights
-    .sort((a, b) => numberFromPrice(a.price) - numberFromPrice(b.price))
-    .slice(0, 3)
-    .map((flight, index) => ({
-      ...flight,
-      title:
-        index === 0
-          ? `${route.destinationCity} Cheapest Flight`
-          : index === 1
-            ? `${route.destinationCity} Balanced Flight`
-            : `${route.destinationCity} Convenient Flight`,
-      tag: index === 0 ? "CHEAPEST" : index === 1 ? "BALANCED" : "CONVENIENT",
-    }));
-}
-
-function scoreTripRow(rowText: string, selected: any) {
-  const text = normaliseLower(rowText);
+function urgencyScore(email: EmailItem) {
+  const text = `${email.subject} ${email.snippet}`.toLowerCase();
   let score = 0;
 
-  if (selected.airline && text.includes(normaliseLower(selected.airline))) score += 5;
-  if (selected.departureTime && text.includes(normaliseLower(selected.departureTime))) score += 4;
-  if (selected.arrivalTime && text.includes(normaliseLower(selected.arrivalTime))) score += 4;
-
-  if (selected.price) {
-    const cleanPrice = normaliseLower(selected.price);
-    const priceWithoutCurrency = cleanPrice.replace("sgd ", "").replace("sgd", "");
-    if (text.includes(cleanPrice)) score += 4;
-    if (priceWithoutCurrency && text.includes(priceWithoutCurrency)) score += 4;
-  }
-
-  if (selected.stops && text.includes(normaliseLower(selected.stops))) score += 2;
-
-  if (selected.route) {
-    const parts = String(selected.route)
-      .split("→")
-      .map((part) => normaliseLower(part))
-      .filter(Boolean);
-
-    for (const part of parts) {
-      if (text.includes(part)) score += 2;
-    }
-  }
+  if (email.unread) score += 2;
+  if (text.includes("today")) score += 4;
+  if (text.includes("urgent")) score += 5;
+  if (text.includes("deadline")) score += 4;
+  if (text.includes("confirm")) score += 3;
+  if (text.includes("action required")) score += 4;
+  if (text.includes("demo")) score += 3;
+  if (text.includes("payment")) score += 2;
+  if (text.includes("weekly")) score -= 2;
+  if (text.includes("newsletter")) score -= 3;
 
   return score;
 }
 
-async function clickTripSelectButton(page: Page, row: Locator) {
-  const buttonCandidates = [
-    row.getByRole("button", { name: /select|view details|continue|book/i }).first(),
-    row.locator('button:has-text("Select")').first(),
-    row.locator('button:has-text("View Details")').first(),
-    row.locator('[role="button"]:has-text("Select")').first(),
-    row.locator('[role="button"]:has-text("View Details")').first(),
-  ];
+function getUrgency(email: EmailItem): EmailUrgency {
+  const score = urgencyScore(email);
 
-  for (const button of buttonCandidates) {
-    if (await isVisible(button, 3000)) {
-      await button.scrollIntoViewIfNeeded().catch(() => null);
-      await button.click({ timeout: 5000 });
-      await page.waitForTimeout(3000);
-      return true;
-    }
-  }
-
-  return false;
+  if (score >= 6) return "urgent";
+  if (score >= 3) return "important";
+  return "normal";
 }
 
-async function selectMatchingTripFlight(page: Page, selected: any) {
-  await closeTripPopups(page);
-
-  const rowBaseText = selected.airline || selected.price || selected.departureTime || "Select";
-
-  const rowCandidates = [
-    page.locator("div").filter({ hasText: rowBaseText }),
-    page.locator("div").filter({ hasText: /SGD|USD|S\$|US\$/i }),
-    page.locator('[class*="flight"], [class*="Flight"], [class*="card"], [class*="Card"]'),
-    page.locator("body div"),
-  ];
-
-  let bestRow: Locator | null = null;
-  let bestScore = 0;
-  let bestText = "";
-
-  for (const rows of rowCandidates) {
-    const count = await rows.count().catch(() => 0);
-
-    for (let index = 0; index < Math.min(count, 180); index += 1) {
-      const row = rows.nth(index);
-
-      if (!(await isVisible(row, 500))) continue;
-
-      const text = await row.innerText({ timeout: 800 }).catch(() => "");
-      if (!text || text.length < 20) continue;
-
-      const score = scoreTripRow(text, selected);
-
-      if (score > bestScore) {
-        bestScore = score;
-        bestRow = row;
-        bestText = text;
-      }
-    }
-
-    if (bestRow && bestScore >= 8) break;
-  }
-
-  console.log("Best Trip.com row score:", bestScore);
-  console.log("Best Trip.com row text:", bestText.slice(0, 500));
-
-  if (bestRow && bestScore >= 4) {
-    const clicked = await clickTripSelectButton(page, bestRow);
-
-    if (clicked) {
-      return {
-        selected: true,
-        reason: `Matched row and clicked Select / View Details. Score: ${bestScore}`,
-      };
-    }
-  }
-
-  const firstSelect = page
-    .getByRole("button", { name: /select|view details|continue|book/i })
-    .first();
-
-  if (await isVisible(firstSelect, 4000)) {
-    await firstSelect.click({ timeout: 5000 });
-    await page.waitForTimeout(3000);
-
-    return {
-      selected: true,
-      reason: "Clicked first visible Select / View Details button.",
-    };
-  }
+function buildEmailSummary(email: EmailItem): EmailSummary {
+  const label = classifyEmail(email);
 
   return {
-    selected: false,
-    reason: "No matching flight row found.",
+    id: email.id,
+    from: email.from,
+    subject: email.subject,
+    receivedAt: email.receivedAt || "Recently",
+    unread: Boolean(email.unread),
+    label,
+    urgency: getUrgency(email),
+    summary: normalise(email.snippet),
+    suggestedAction:
+      label === "High Priority"
+        ? "Review and reply today."
+        : label === "Finance"
+          ? "Check payment/account status."
+          : label === "Client"
+            ? "Draft a polite confirmation reply."
+            : label === "Low Priority"
+              ? "Archive or read later."
+              : "Review when free.",
+  };
+}
+
+function buildReplyDraft(
+  email: EmailItem,
+  tone: DraftReplyRequest["tone"] = "professional"
+) {
+  const senderName = email.from.split("<")[0].trim() || "there";
+  const subject = email.subject.toLowerCase().startsWith("re:")
+    ? email.subject
+    : `Re: ${email.subject}`;
+
+  const signoff =
+    tone === "formal"
+      ? "Best regards,"
+      : tone === "warm"
+        ? "Warm regards,"
+        : "Best regards,";
+
+  const body =
+    tone === "short"
+      ? `Hi ${senderName},\n\nThanks for your email. I have received this and will review it shortly.\n\n${signoff}\nAndy`
+      : `Hi ${senderName},\n\nThank you for your email.\n\nI have received the details and will review them carefully. I will get back to you with the next steps shortly.\n\n${signoff}\nAndy`;
+
+  return {
+    to: email.from,
+    subject,
+    body,
+    status: "draft_ready",
+    safetyNote: "Kuro prepared this as a draft only. The user should approve before sending.",
+  };
+}
+
+function buildGoodMorningBrief(emails: EmailItem[]) {
+  const summaries = emails.map(buildEmailSummary);
+  const unreadCount = emails.filter((email) => email.unread).length;
+
+  const urgencyOrder: Record<EmailUrgency, number> = {
+    urgent: 3,
+    important: 2,
+    normal: 1,
+  };
+
+  const highPriority = summaries
+    .filter((email) => email.label === "High Priority" || email.urgency === "urgent")
+    .sort((a, b) => urgencyOrder[b.urgency] - urgencyOrder[a.urgency]);
+
+  const normal = summaries.filter(
+    (email) => !highPriority.some((item) => item.id === email.id)
+  );
+
+  return {
+    title: "Good Morning, Andy",
+    subtitle: "Kuro scanned your inbox and prepared your executive brief.",
+    inboxStats: {
+      totalEmailsScanned: emails.length,
+      unreadCount,
+      highPriorityCount: highPriority.length,
+    },
+    highPriority,
+    normal,
+    recommendedFocus:
+      highPriority.length > 0
+        ? `Start with "${highPriority[0].subject}" from ${highPriority[0].from}.`
+        : "No urgent emails detected. You can start with planned work.",
+    suggestedActions: [
+      "Reply to high-priority emails first.",
+      "Archive low-priority newsletters.",
+      "Draft replies before sending anything.",
+      "Review finance/payment emails separately.",
+    ],
   };
 }
 
@@ -732,10 +741,403 @@ async function selectMatchingTripFlight(page: Page, selected: any) {
 app.get("/", (_req, res) => {
   res.json({
     success: true,
-    service: "Kuro Browser Agent",
+    service: "Kuro Executive OS Agent",
     status: "running",
+    modules: ["desktop", "gmail", "spotify"],
+    safety:
+      "Kuro can open and read apps/sites, but will stop before sending, deleting, purchasing, paying, or submitting.",
   });
 });
+
+/* ----------------------------- Desktop endpoints ----------------------------- */
+
+app.post("/desktop/plan", async (req, res) => {
+  try {
+    const body = req.body as DesktopPlanRequest;
+
+    if (!body.prompt || typeof body.prompt !== "string") {
+      return res.status(400).json({
+        success: false,
+        error: "prompt is required.",
+      });
+    }
+
+    const plan = buildDesktopPlan(body.prompt);
+
+    return res.json({
+      success: true,
+      prompt: body.prompt,
+      plan,
+      approvalRequired: true,
+      message: "Kuro prepared a permission-first desktop action plan.",
+    });
+  } catch (error) {
+    console.error("========== KURO DESKTOP PLAN ERROR ==========");
+    console.error(error);
+
+    return res.status(500).json({
+      success: false,
+      error:
+        error instanceof Error ? error.message : "Kuro could not prepare the desktop plan.",
+    });
+  }
+});
+
+app.post("/desktop/execute", async (req, res) => {
+  try {
+    const body = req.body as DesktopExecuteRequest;
+    const page = await getDesktopPage();
+
+    const plan =
+      Array.isArray(body.plan) && body.plan.length > 0
+        ? body.plan
+        : buildDesktopPlan(body.prompt || "Open Google");
+
+    const results = [];
+
+    for (const step of plan) {
+      const result = await executeDesktopStep(page, step);
+      results.push(result);
+
+      if (result.waitingForUser || result.blocked) break;
+    }
+
+    return res.json({
+      success: true,
+      results,
+      currentUrl: page.url(),
+      message: "Kuro executed the approved safe desktop steps.",
+    });
+  } catch (error) {
+    console.error("========== KURO DESKTOP EXECUTE ERROR ==========");
+    console.error(error);
+
+    return res.status(500).json({
+      success: false,
+      error:
+        error instanceof Error ? error.message : "Kuro could not execute desktop steps.",
+    });
+  }
+});
+
+app.post("/desktop/open-url", async (req, res) => {
+  try {
+    const body = req.body as DesktopExecuteRequest;
+
+    if (!body.url || typeof body.url !== "string") {
+      return res.status(400).json({
+        success: false,
+        error: "url is required.",
+      });
+    }
+
+    const page = await getDesktopPage();
+
+    await page.goto(body.url, {
+      waitUntil: "domcontentloaded",
+      timeout: 60000,
+    });
+
+    await page.waitForTimeout(2500);
+
+    return res.json({
+      success: true,
+      openedUrl: page.url(),
+      message: `Kuro opened ${body.url}.`,
+    });
+  } catch (error) {
+    console.error("========== KURO OPEN URL ERROR ==========");
+    console.error(error);
+
+    return res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : "Kuro could not open the URL.",
+    });
+  }
+});
+
+app.post("/desktop/search-web", async (req, res) => {
+  try {
+    const body = req.body as DesktopExecuteRequest;
+
+    if (!body.query || typeof body.query !== "string") {
+      return res.status(400).json({
+        success: false,
+        error: "query is required.",
+      });
+    }
+
+    const page = await getDesktopPage();
+    const url = "https://www.google.com/search?q=" + encodeURIComponent(body.query);
+
+    await page.goto(url, {
+      waitUntil: "domcontentloaded",
+      timeout: 60000,
+    });
+
+    await page.waitForTimeout(2500);
+
+    const text = await page
+      .locator("body")
+      .innerText({ timeout: 5000 })
+      .catch(() => "");
+
+    return res.json({
+      success: true,
+      query: body.query,
+      openedUrl: page.url(),
+      visibleText: text.slice(0, 4000),
+      message: `Kuro searched the web for "${body.query}".`,
+    });
+  } catch (error) {
+    console.error("========== KURO SEARCH WEB ERROR ==========");
+    console.error(error);
+
+    return res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : "Kuro could not search the web.",
+    });
+  }
+});
+
+app.post("/desktop/open-gmail", async (_req, res) => {
+  try {
+    const page = await getDesktopPage();
+
+    await page.goto("https://mail.google.com", {
+      waitUntil: "domcontentloaded",
+      timeout: 60000,
+    });
+
+    await page.waitForTimeout(4000);
+
+    return res.json({
+      success: true,
+      openedUrl: page.url(),
+      message:
+        "Kuro opened Gmail. If login is required, please log in manually. Kuro will not send emails without approval.",
+    });
+  } catch (error) {
+    console.error("========== KURO OPEN GMAIL ERROR ==========");
+    console.error(error);
+
+    return res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : "Kuro could not open Gmail.",
+    });
+  }
+});
+
+app.post("/desktop/open-calendar", async (_req, res) => {
+  try {
+    const page = await getDesktopPage();
+
+    await page.goto("https://calendar.google.com", {
+      waitUntil: "domcontentloaded",
+      timeout: 60000,
+    });
+
+    await page.waitForTimeout(4000);
+
+    return res.json({
+      success: true,
+      openedUrl: page.url(),
+      message:
+        "Kuro opened Google Calendar. Kuro will not create or edit events without approval.",
+    });
+  } catch (error) {
+    console.error("========== KURO OPEN CALENDAR ERROR ==========");
+    console.error(error);
+
+    return res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : "Kuro could not open Calendar.",
+    });
+  }
+});
+
+app.post("/desktop/extract-visible-text", async (_req, res) => {
+  try {
+    const page = await getDesktopPage();
+
+    const text = await page
+      .locator("body")
+      .innerText({ timeout: 5000 })
+      .catch(() => "");
+
+    return res.json({
+      success: true,
+      currentUrl: page.url(),
+      visibleText: text.slice(0, 8000),
+      message: "Kuro extracted visible text from the active browser page.",
+    });
+  } catch (error) {
+    console.error("========== KURO EXTRACT TEXT ERROR ==========");
+    console.error(error);
+
+    return res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : "Kuro could not extract text.",
+    });
+  }
+});
+
+app.post("/desktop/close", async (_req, res) => {
+  try {
+    if (desktopContext) {
+      await desktopContext.close().catch(() => null);
+      desktopContext = null;
+    }
+
+    return res.json({
+      success: true,
+      message: "Kuro closed the desktop browser session.",
+    });
+  } catch (error) {
+    console.error("========== KURO DESKTOP CLOSE ERROR ==========");
+    console.error(error);
+
+    return res.status(500).json({
+      success: false,
+      error:
+        error instanceof Error ? error.message : "Kuro could not close the desktop browser.",
+    });
+  }
+});
+
+/* ----------------------------- Gmail endpoints ----------------------------- */
+
+app.post("/gmail/good-morning", async (req, res) => {
+  try {
+    const body = req.body as GmailBriefRequest;
+    const emails = getEmails(body.emails);
+    const brief = buildGoodMorningBrief(emails);
+
+    return res.json({
+      success: true,
+      mode: "good_morning",
+      brief,
+      message: "Kuro prepared your executive inbox brief.",
+    });
+  } catch (error) {
+    console.error("========== KURO GMAIL GOOD MORNING ERROR ==========");
+    console.error(error);
+
+    return res.status(500).json({
+      success: false,
+      error:
+        error instanceof Error ? error.message : "Kuro could not prepare the inbox brief.",
+    });
+  }
+});
+
+app.post("/gmail/summarize-inbox", async (req, res) => {
+  try {
+    const body = req.body as GmailBriefRequest;
+    const emails = getEmails(body.emails);
+    const summaries = emails.map(buildEmailSummary);
+
+    return res.json({
+      success: true,
+      summaries,
+      message: `Kuro summarized ${summaries.length} emails.`,
+    });
+  } catch (error) {
+    console.error("========== KURO GMAIL SUMMARY ERROR ==========");
+    console.error(error);
+
+    return res.status(500).json({
+      success: false,
+      error:
+        error instanceof Error ? error.message : "Kuro could not summarize the inbox.",
+    });
+  }
+});
+
+app.post("/gmail/draft-reply", async (req, res) => {
+  try {
+    const body = req.body as DraftReplyRequest;
+    const email = body.email || demoInbox[1];
+    const draft = buildReplyDraft(email, body.tone || "professional");
+
+    return res.json({
+      success: true,
+      draft,
+      originalEmail: email,
+      message: "Kuro prepared a reply draft. User approval is required before sending.",
+    });
+  } catch (error) {
+    console.error("========== KURO GMAIL DRAFT ERROR ==========");
+    console.error(error);
+
+    return res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : "Kuro could not draft the reply.",
+    });
+  }
+});
+
+app.post("/gmail/smart-labels", async (req, res) => {
+  try {
+    const body = req.body as GmailBriefRequest;
+    const emails = getEmails(body.emails);
+
+    const labelled = emails.map((email) => ({
+      ...email,
+      label: classifyEmail(email),
+      urgencyScore: urgencyScore(email),
+    }));
+
+    return res.json({
+      success: true,
+      labelled,
+      message: "Kuro sorted the inbox into smart labels.",
+    });
+  } catch (error) {
+    console.error("========== KURO GMAIL LABEL ERROR ==========");
+    console.error(error);
+
+    return res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : "Kuro could not label the inbox.",
+    });
+  }
+});
+
+app.post("/gmail/search", async (req, res) => {
+  try {
+    const { query, emails } = req.body as GmailBriefRequest & { query?: string };
+    const sourceEmails = getEmails(emails);
+    const cleanQuery = String(query || "").toLowerCase();
+
+    const results = sourceEmails
+      .filter((email) => {
+        const text = `${email.from} ${email.subject} ${email.snippet}`.toLowerCase();
+        return !cleanQuery || text.includes(cleanQuery);
+      })
+      .map(buildEmailSummary);
+
+    return res.json({
+      success: true,
+      query: cleanQuery,
+      results,
+      message:
+        results.length > 0
+          ? `Kuro found ${results.length} matching emails.`
+          : "Kuro could not find matching emails.",
+    });
+  } catch (error) {
+    console.error("========== KURO GMAIL SEARCH ERROR ==========");
+    console.error(error);
+
+    return res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : "Kuro could not search the inbox.",
+    });
+  }
+});
+
+/* ----------------------------- Spotify endpoint - unchanged ----------------------------- */
 
 app.post("/spotify/browser-add-tracks", async (req, res) => {
   let context: Awaited<ReturnType<typeof chromium.launchPersistentContext>> | null =
@@ -833,169 +1235,7 @@ app.post("/spotify/browser-add-tracks", async (req, res) => {
     return res.status(500).json({
       success: false,
       error:
-        error instanceof Error
-          ? error.message
-          : "Spotify browser agent failed.",
-    });
-  } finally {
-    if (context) {
-      await new Promise((resolve) => setTimeout(resolve, 30000));
-      await context.close().catch(() => null);
-    }
-  }
-});
-
-app.post("/trip/search-flights", async (req, res) => {
-  let context: Awaited<ReturnType<typeof chromium.launchPersistentContext>> | null =
-    null;
-
-  try {
-    const body = req.body as FlightSearchRequest;
-
-    if (!body.prompt || typeof body.prompt !== "string") {
-      return res.status(400).json({
-        success: false,
-        error: "prompt is required.",
-      });
-    }
-
-    const route = parseFlightPrompt(body);
-    const tripUrl = buildTripUrl(route);
-    const userDataDir = path.join(process.cwd(), ".kuro-trip-chrome-profile");
-
-    context = await chromium.launchPersistentContext(userDataDir, {
-      channel: "chrome",
-      headless: false,
-      slowMo: 120,
-      viewport: {
-        width: 1440,
-        height: 950,
-      },
-      args: [
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-        "--disable-software-rasterizer",
-        "--start-maximized",
-      ],
-    });
-
-    const page = context.pages()[0] || (await context.newPage());
-
-    await page.goto(tripUrl, {
-      waitUntil: "domcontentloaded",
-      timeout: 60000,
-    });
-
-    await page.waitForTimeout(7000);
-    await closeTripPopups(page);
-
-    let flights = await scrapeVisibleTripFlights(page, route, tripUrl);
-
-    if (!flights.length) {
-      await tryFillTripSearchForm(page, route);
-      flights = await scrapeVisibleTripFlights(page, route, tripUrl);
-    }
-
-    if (!flights.length) {
-      return res.status(404).json({
-        success: false,
-        error:
-          "Kuro opened Trip.com but could not scrape visible flight rows yet. Try Singapore to Jakarta first, then we can tune the selectors for wider routes.",
-        tripUrl,
-        route,
-      });
-    }
-
-    return res.json({
-      success: true,
-      tripUrl,
-      route,
-      flights,
-      message: `Kuro found ${flights.length} live Trip.com flight options.`,
-    });
-  } catch (error) {
-    console.error("========== KURO TRIP.COM SEARCH ERROR ==========");
-    console.error(error);
-
-    return res.status(500).json({
-      success: false,
-      error:
-        error instanceof Error
-          ? error.message
-          : "Trip.com flight search failed.",
-    });
-  } finally {
-    if (context) {
-      await new Promise((resolve) => setTimeout(resolve, 5000));
-      await context.close().catch(() => null);
-    }
-  }
-});
-
-app.post("/trip/open-flight", async (req, res) => {
-  let context: Awaited<ReturnType<typeof chromium.launchPersistentContext>> | null =
-    null;
-
-  try {
-    const { tripUrl, selectedFlight, recommendationTitle } = req.body;
-
-    if (!tripUrl || typeof tripUrl !== "string") {
-      return res.status(400).json({
-        success: false,
-        error: "tripUrl is required.",
-      });
-    }
-
-    const userDataDir = path.join(process.cwd(), ".kuro-trip-chrome-profile");
-
-    context = await chromium.launchPersistentContext(userDataDir, {
-      channel: "chrome",
-      headless: false,
-      slowMo: 180,
-      viewport: {
-        width: 1440,
-        height: 950,
-      },
-      args: [
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-        "--disable-software-rasterizer",
-        "--start-maximized",
-      ],
-    });
-
-    const page = context.pages()[0] || (await context.newPage());
-    const cleanUrl = removeKuroParams(tripUrl);
-
-    await page.goto(cleanUrl, {
-      waitUntil: "domcontentloaded",
-      timeout: 60000,
-    });
-
-    await page.waitForTimeout(7000);
-    await closeTripPopups(page);
-
-    const result = await selectMatchingTripFlight(page, selectedFlight || {});
-
-    return res.json({
-      success: true,
-      recommendationTitle,
-      openedUrl: cleanUrl,
-      selectedFlight: result.selected,
-      message: result.selected
-        ? "Kuro opened Trip.com and selected the matching flight row."
-        : result.reason,
-    });
-  } catch (error) {
-    console.error("========== KURO TRIP.COM ERROR ==========");
-    console.error(error);
-
-    return res.status(500).json({
-      success: false,
-      error:
-        error instanceof Error
-          ? error.message
-          : "Trip.com browser agent failed.",
+        error instanceof Error ? error.message : "Spotify browser agent failed.",
     });
   } finally {
     if (context) {
@@ -1017,14 +1257,11 @@ app.use(
 
     res.status(500).json({
       success: false,
-      error:
-        err instanceof Error
-          ? err.message
-          : "Unknown server error",
+      error: err instanceof Error ? err.message : "Unknown server error",
     });
   }
 );
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Kuro browser agent running on port ${PORT}`);
+  console.log(`Kuro Executive OS Agent running on port ${PORT}`);
 });

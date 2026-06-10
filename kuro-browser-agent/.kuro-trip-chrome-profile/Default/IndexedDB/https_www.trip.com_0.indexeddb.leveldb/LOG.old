@@ -1,7 +1,15 @@
-2026/06/10-09:12:25.064 d1262 Reusing MANIFEST /Users/nd/Desktop/kuro/kuro-browser-agent/.kuro-trip-chrome-profile/Default/IndexedDB/https_www.trip.com_0.indexeddb.leveldb/MANIFEST-000001
-2026/06/10-09:12:25.064 d1262 Recovering log #4
-2026/06/10-09:12:25.064 d1262 Reusing old log /Users/nd/Desktop/kuro/kuro-browser-agent/.kuro-trip-chrome-profile/Default/IndexedDB/https_www.trip.com_0.indexeddb.leveldb/000004.log 
-2026/06/10-09:12:26.785 d1262 Level-0 table #8: started
-2026/06/10-09:12:26.787 d1262 Level-0 table #8: 70856 bytes OK
-2026/06/10-09:12:26.788 d1262 Delete type=0 #4
-2026/06/10-09:12:26.789 d1262 Manual compaction at level-0 from '\x00\x04\x00\x00\x00' @ 72057594037927935 : 1 .. '\x00\x05\x00\x00\x00' @ 0 : 0; will stop at (end)
+2026/06/10-09:47:58.079 dbf36 Reusing MANIFEST /Users/nd/Desktop/kuro/kuro-browser-agent/.kuro-trip-chrome-profile/Default/IndexedDB/https_www.trip.com_0.indexeddb.leveldb/MANIFEST-000001
+2026/06/10-09:47:58.079 dbf36 Recovering log #20
+2026/06/10-09:47:58.080 dbf36 Reusing old log /Users/nd/Desktop/kuro/kuro-browser-agent/.kuro-trip-chrome-profile/Default/IndexedDB/https_www.trip.com_0.indexeddb.leveldb/000020.log 
+2026/06/10-09:47:58.080 dbf36 Delete type=2 #19
+2026/06/10-09:48:14.249 dbf36 Level-0 table #25: started
+2026/06/10-09:48:14.251 dbf36 Level-0 table #25: 92217 bytes OK
+2026/06/10-09:48:14.252 dbf36 Delete type=0 #20
+2026/06/10-09:48:14.253 dbf36 Manual compaction at level-0 from '\x00\x0c\x00\x00\x00' @ 72057594037927935 : 1 .. '\x00\x0d\x00\x00\x00' @ 0 : 0; will stop at '\x00\x0c\x00\x00\x05' @ 8563 : 1
+2026/06/10-09:48:14.253 dbf36 Compacting 1@0 + 1@1 files
+2026/06/10-09:48:14.255 dbf36 Generated table #26@0: 1879 keys, 68066 bytes
+2026/06/10-09:48:14.255 dbf36 Compacted 1@0 + 1@1 files => 68066 bytes
+2026/06/10-09:48:14.256 dbf36 compacted to: files[ 0 1 1 0 0 0 0 ]
+2026/06/10-09:48:14.256 dbf36 Delete type=2 #25
+2026/06/10-09:48:14.257 dbf36 Manual compaction at level-0 from '\x00\x0c\x00\x00\x05' @ 8563 : 1 .. '\x00\x0d\x00\x00\x00' @ 0 : 0; will stop at (end)
+2026/06/10-09:48:45.138 dbf4b Manual compaction at level-0 from '\x00\x0d\x00\x00\x00' @ 72057594037927935 : 1 .. '\x00\x0e\x00\x00\x00' @ 0 : 0; will stop at (end)

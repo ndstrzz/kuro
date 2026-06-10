@@ -1,2 +1,3 @@
-2026/06/10-09:12:29.529 d1263 Creating DB /Users/nd/Desktop/kuro/kuro-browser-agent/.kuro-trip-chrome-profile/Default/GCM Store since it was missing.
-2026/06/10-09:12:29.533 d1263 Reusing MANIFEST /Users/nd/Desktop/kuro/kuro-browser-agent/.kuro-trip-chrome-profile/Default/GCM Store/MANIFEST-000001
+2026/06/10-09:48:00.574 dbf39 Reusing MANIFEST /Users/nd/Desktop/kuro/kuro-browser-agent/.kuro-trip-chrome-profile/Default/GCM Store/MANIFEST-000001
+2026/06/10-09:48:00.575 dbf39 Recovering log #3
+2026/06/10-09:48:00.575 dbf39 Reusing old log /Users/nd/Desktop/kuro/kuro-browser-agent/.kuro-trip-chrome-profile/Default/GCM Store/000003.log 

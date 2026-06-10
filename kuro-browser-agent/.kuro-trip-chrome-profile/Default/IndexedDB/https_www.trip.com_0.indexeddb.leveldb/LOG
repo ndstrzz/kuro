@@ -1,3 +1,15 @@
-2026/06/10-09:23:59.759 d454c Reusing MANIFEST /Users/nd/Desktop/kuro/kuro-browser-agent/.kuro-trip-chrome-profile/Default/IndexedDB/https_www.trip.com_0.indexeddb.leveldb/MANIFEST-000001
-2026/06/10-09:23:59.760 d454c Recovering log #7
-2026/06/10-09:23:59.761 d454c Reusing old log /Users/nd/Desktop/kuro/kuro-browser-agent/.kuro-trip-chrome-profile/Default/IndexedDB/https_www.trip.com_0.indexeddb.leveldb/000007.log 
+2026/06/10-09:52:07.815 dd64c Reusing MANIFEST /Users/nd/Desktop/kuro/kuro-browser-agent/.kuro-trip-chrome-profile/Default/IndexedDB/https_www.trip.com_0.indexeddb.leveldb/MANIFEST-000001
+2026/06/10-09:52:07.815 dd64c Recovering log #24
+2026/06/10-09:52:07.816 dd64c Reusing old log /Users/nd/Desktop/kuro/kuro-browser-agent/.kuro-trip-chrome-profile/Default/IndexedDB/https_www.trip.com_0.indexeddb.leveldb/000024.log 
+2026/06/10-09:52:07.817 dd64c Delete type=2 #22
+2026/06/10-09:52:23.861 dd65c Level-0 table #29: started
+2026/06/10-09:52:23.868 dd65c Level-0 table #29: 258689 bytes OK
+2026/06/10-09:52:23.869 dd65c Delete type=0 #24
+2026/06/10-09:52:23.870 dd64a Manual compaction at level-0 from '\x00\x0e\x00\x00\x00' @ 72057594037927935 : 1 .. '\x00\x0f\x00\x00\x00' @ 0 : 0; will stop at '\x00\x0e\x00\x00\x05' @ 12230 : 1
+2026/06/10-09:52:23.870 dd64a Compacting 1@0 + 1@1 files
+2026/06/10-09:52:23.873 dd64a Generated table #30@0: 2166 keys, 73052 bytes
+2026/06/10-09:52:23.873 dd64a Compacted 1@0 + 1@1 files => 73052 bytes
+2026/06/10-09:52:23.874 dd64a compacted to: files[ 0 1 1 0 0 0 0 ]
+2026/06/10-09:52:23.874 dd64a Delete type=2 #29
+2026/06/10-09:52:23.876 dd64a Manual compaction at level-0 from '\x00\x0e\x00\x00\x05' @ 12230 : 1 .. '\x00\x0f\x00\x00\x00' @ 0 : 0; will stop at (end)
+2026/06/10-09:52:57.955 dd65a Manual compaction at level-0 from '\x00\x0f\x00\x00\x00' @ 72057594037927935 : 1 .. '\x00\x10\x00\x00\x00' @ 0 : 0; will stop at (end)
