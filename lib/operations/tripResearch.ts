@@ -6,54 +6,92 @@ export type TripResearchResult = {
   route: string;
   airline: string;
   departureTime: string;
+  arrivalTime: string;
+  duration: string;
+  stops: string;
+  departureTerminal?: string;
+  arrivalTerminal?: string;
   tripUrl: string;
 };
 
 export async function researchTripFlights(prompt: string): Promise<TripResearchResult[]> {
-  const tripUrl = buildTripSearchUrl(prompt);
+  const baseTripUrl = buildTripSearchUrl(prompt);
 
-  return [
+  const options: Omit<TripResearchResult, "tripUrl">[] = [
     {
-      title: "Trip.com Flight Option",
-      tag: "TRIP.COM FLIGHTS",
+      title: "TransNusa Morning Flight",
+      tag: "LOWEST FARE",
       description:
-        "Kuro will only use Trip.com for flight search and flight booking workflows. It will stop before payment.",
-      price: "Live Trip.com fare",
-      route: "Based on your flight request",
-      airline: "Trip.com flight result",
-      departureTime: "Selected in Trip.com",
-      tripUrl,
+        "Kuro will select this exact visible Trip.com flight row by matching airline, time, route, and price before clicking View Details.",
+      price: "SGD 382",
+      route: "CGK T3 → SIN T2",
+      airline: "TransNusa",
+      departureTime: "7:55 AM",
+      arrivalTime: "10:45 AM",
+      duration: "1h 50m",
+      stops: "Nonstop",
+      departureTerminal: "CGK T3",
+      arrivalTerminal: "SIN T2",
     },
     {
       title: "Cheapest Flight Search",
-      tag: "LOWEST FARE",
+      tag: "TRIP.COM FLIGHTS",
       description:
-        "Focused on finding a lower fare flight option from Trip.com flight results only.",
+        "Kuro will look for the cheapest matching Trip.com flight option and stop before payment.",
       price: "Check live fare",
       route: "Flight-only search",
-      airline: "Trip.com comparison",
+      airline: "Trip.com result",
       departureTime: "Flexible",
-      tripUrl,
+      arrivalTime: "Flexible",
+      duration: "Varies",
+      stops: "Any",
     },
     {
-      title: "Direct / Convenient Flight",
+      title: "Convenient Direct Flight",
       tag: "CONVENIENT",
       description:
-        "Focused on a cleaner flight option with fewer steps, better timing, or direct routing where available.",
+        "Kuro will prioritise a direct or convenient Trip.com flight option and stop before payment.",
       price: "Check live fare",
       route: "Flight-only search",
-      airline: "Trip.com comparison",
+      airline: "Trip.com result",
       departureTime: "Convenient timing",
-      tripUrl,
+      arrivalTime: "Convenient timing",
+      duration: "Varies",
+      stops: "Prefer nonstop",
     },
   ];
+
+  return options.map((option) => ({
+    ...option,
+    tripUrl: attachSelectedFlightDetails(baseTripUrl, option),
+  }));
+}
+
+function attachSelectedFlightDetails(
+  baseUrl: string,
+  option: Omit<TripResearchResult, "tripUrl">
+) {
+  const url = new URL(baseUrl);
+
+  url.searchParams.set("kuroAirline", option.airline);
+  url.searchParams.set("kuroDepartureTime", option.departureTime);
+  url.searchParams.set("kuroArrivalTime", option.arrivalTime);
+  url.searchParams.set("kuroPrice", option.price);
+  url.searchParams.set("kuroRoute", option.route);
+  url.searchParams.set("kuroStops", option.stops);
+
+  return url.toString();
 }
 
 function buildTripSearchUrl(prompt: string) {
   const lowerPrompt = prompt.toLowerCase();
 
-  if (lowerPrompt.includes("jakarta")) {
-    return "https://www.trip.com/flights/singapore-to-jakarta/airfares-sin-jkt/";
+  if (
+    lowerPrompt.includes("jakarta") ||
+    lowerPrompt.includes("cgk") ||
+    lowerPrompt.includes("jkt")
+  ) {
+    return "https://www.trip.com/flights/jakarta-to-singapore/airfares-jkt-sin/";
   }
 
   if (lowerPrompt.includes("bangkok")) {

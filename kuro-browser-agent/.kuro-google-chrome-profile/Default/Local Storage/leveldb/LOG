@@ -1,6 +1,6 @@
-2026/06/10-07:45:03.090 bc060 Reusing MANIFEST /Users/nd/Desktop/kuro/kuro-browser-agent/.kuro-google-chrome-profile/Default/Local Storage/leveldb/MANIFEST-000001
-2026/06/10-07:45:03.092 bc060 Recovering log #6
-2026/06/10-07:45:03.093 bc060 Reusing old log /Users/nd/Desktop/kuro/kuro-browser-agent/.kuro-google-chrome-profile/Default/Local Storage/leveldb/000006.log 
-2026/06/10-07:47:03.949 bc064 Level-0 table #10: started
-2026/06/10-07:47:03.953 bc064 Level-0 table #10: 17198 bytes OK
-2026/06/10-07:47:03.956 bc064 Delete type=0 #6
+2026/06/10-07:59:45.578 c01d2 Reusing MANIFEST /Users/nd/Desktop/kuro/kuro-browser-agent/.kuro-google-chrome-profile/Default/Local Storage/leveldb/MANIFEST-000001
+2026/06/10-07:59:45.580 c01d2 Recovering log #12
+2026/06/10-07:59:45.580 c01d2 Reusing old log /Users/nd/Desktop/kuro/kuro-browser-agent/.kuro-google-chrome-profile/Default/Local Storage/leveldb/000012.log 
+2026/06/10-08:02:30.557 c01d5 Level-0 table #17: started
+2026/06/10-08:02:30.559 c01d5 Level-0 table #17: 23879 bytes OK
+2026/06/10-08:02:30.562 c01d5 Delete type=0 #12

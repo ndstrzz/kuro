@@ -1,3 +1,6 @@
-2026/06/10-07:42:27.108 bb569 Reusing MANIFEST /Users/nd/Desktop/kuro/kuro-browser-agent/.kuro-google-chrome-profile/Default/IndexedDB/https_open.spotify.com_0.indexeddb.leveldb/MANIFEST-000001
-2026/06/10-07:42:27.109 bb569 Recovering log #3
-2026/06/10-07:42:27.112 bb569 Reusing old log /Users/nd/Desktop/kuro/kuro-browser-agent/.kuro-google-chrome-profile/Default/IndexedDB/https_open.spotify.com_0.indexeddb.leveldb/000003.log 
+2026/06/10-07:55:57.027 bebd2 Reusing MANIFEST /Users/nd/Desktop/kuro/kuro-browser-agent/.kuro-google-chrome-profile/Default/IndexedDB/https_open.spotify.com_0.indexeddb.leveldb/MANIFEST-000001
+2026/06/10-07:55:57.029 bebd2 Recovering log #3
+2026/06/10-07:55:57.036 bebd2 Reusing old log /Users/nd/Desktop/kuro/kuro-browser-agent/.kuro-google-chrome-profile/Default/IndexedDB/https_open.spotify.com_0.indexeddb.leveldb/000003.log 
+2026/06/10-07:56:46.767 bebd4 Level-0 table #5: started
+2026/06/10-07:56:46.775 bebd4 Level-0 table #5: 2240385 bytes OK
+2026/06/10-07:56:46.778 bebd4 Delete type=0 #3

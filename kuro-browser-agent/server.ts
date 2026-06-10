@@ -41,36 +41,12 @@ function getSeeds(prompt: string, selectedMood?: string, trackSeeds?: string[]) 
     ).slice(0, 12);
   }
 
-  const lowerPrompt = `${prompt} ${selectedMood || ""}`.toLowerCase();
-
-  if (
-    lowerPrompt.includes("kpop") ||
-    lowerPrompt.includes("k-pop") ||
-    lowerPrompt.includes("korean")
-  ) {
-    return [
-      "aespa Supernova",
-      "ILLIT Magnetic",
-      "NewJeans Super Shy",
-      "LE SSERAFIM EASY",
-      "IVE I AM",
-      "Jung Kook Standing Next to You",
-      "SEVENTEEN MAESTRO",
-      "Stray Kids LALALALA",
-      "RIIZE Get A Guitar",
-      "ENHYPEN Bite Me",
-    ];
-  }
-
   return [
     "lofi focus",
     "soft piano",
     "coffeehouse jazz",
     "calm instrumental",
     "ambient study",
-    "peaceful piano",
-    "deep focus",
-    "bossa nova cafe",
   ];
 }
 
@@ -85,8 +61,8 @@ async function findPlaylistSearchInput(page: Page) {
     page.getByPlaceholder(/let'?s find something/i).first(),
     page.locator('input[placeholder*="Search"]').first(),
     page.locator('input[placeholder*="Find"]').first(),
-    page.locator('input').last(),
-    page.locator('input').first(),
+    page.locator("input").last(),
+    page.locator("input").first(),
   ];
 
   for (const candidate of candidates) {
@@ -116,7 +92,7 @@ async function clearPlaylistSearchInput(page: Page) {
 
   if (valueAfterClear) {
     await searchInput.fill("").catch(() => null);
-    await page.waitForTimeout(400);
+    await page.waitForTimeout(500);
   }
 
   return true;
@@ -138,56 +114,101 @@ async function searchTrackTitle(page: Page, seed: string) {
   console.log(`Typing exact Exa song title: ${seed}`);
   await searchInput.fill(seed, { timeout: 5000 });
 
-  await page.waitForTimeout(2600);
+  await page.waitForTimeout(3000);
   return true;
 }
 
-async function clickFirstAddButton(page: Page, seed: string) {
-  const addButtonSelectors = [
-    '[data-testid="tracklist-row"] button[aria-label*="Add"]',
-    '[data-testid="tracklist-row"] button:has-text("Add")',
-    '[role="row"] button[aria-label*="Add"]',
-    '[role="row"] button:has-text("Add")',
-    'button[aria-label*="Add"]',
-    'button:has-text("Add")',
-  ];
+async function getSearchResultsContainer(page: Page) {
+  const searchInput = await findPlaylistSearchInput(page);
 
-  for (const selector of addButtonSelectors) {
-    const buttons = page.locator(selector);
-    const count = await buttons.count().catch(() => 0);
-
-    for (let index = 0; index < Math.min(count, 10); index += 1) {
-      const button = buttons.nth(index);
-
-      if (!(await isVisible(button, 1200))) {
-        continue;
-      }
-
-      const ariaLabel = await button.getAttribute("aria-label").catch(() => "");
-      const text = await button.innerText().catch(() => "");
-      const label = `${ariaLabel || ""} ${text || ""}`.toLowerCase();
-
-      if (
-        label.includes("added") ||
-        label.includes("remove") ||
-        label.includes("more") ||
-        label.includes("close")
-      ) {
-        continue;
-      }
-
-      console.log(`Pressing Add for: ${seed}`);
-
-      await button.scrollIntoViewIfNeeded().catch(() => null);
-      await button.click({ timeout: 5000 });
-      await page.waitForTimeout(1800);
-
-      return true;
-    }
+  if (!searchInput) {
+    return page.locator("body");
   }
 
-  console.log(`No Add button found for: ${seed}`);
+  const inputBox = await searchInput.boundingBox().catch(() => null);
+
+  if (!inputBox) {
+    return page.locator("body");
+  }
+
+  return page.locator("body");
+}
+
+async function clickSafeSearchResultAddButton(page: Page, seed: string) {
+  const input = await findPlaylistSearchInput(page);
+  const inputBox = await input?.boundingBox().catch(() => null);
+
+  const candidates = page.locator(
+    [
+      'button:has-text("Add")',
+      'button[aria-label^="Add"]',
+      'button[aria-label*="Add "]',
+      '[role="button"]:has-text("Add")',
+    ].join(", ")
+  );
+
+  const count = await candidates.count().catch(() => 0);
+
+  console.log(`Found ${count} possible Add buttons for: ${seed}`);
+
+  for (let index = 0; index < Math.min(count, 20); index += 1) {
+    const button = candidates.nth(index);
+
+    if (!(await isVisible(button, 1200))) {
+      continue;
+    }
+
+    const box = await button.boundingBox().catch(() => null);
+
+    if (!box) {
+      continue;
+    }
+
+    if (inputBox && box.y < inputBox.y + inputBox.height + 20) {
+      console.log("Skipping button above search input.");
+      continue;
+    }
+
+    const ariaLabel = await button.getAttribute("aria-label").catch(() => "");
+    const text = await button.innerText().catch(() => "");
+    const title = await button.getAttribute("title").catch(() => "");
+
+    const label = `${ariaLabel || ""} ${text || ""} ${title || ""}`.toLowerCase();
+
+    if (
+      label.includes("more") ||
+      label.includes("remove") ||
+      label.includes("added") ||
+      label.includes("options") ||
+      label.includes("menu") ||
+      label.includes("close")
+    ) {
+      console.log(`Skipping unsafe button label: ${label}`);
+      continue;
+    }
+
+    const buttonText = cleanButtonText(text);
+
+    if (buttonText && buttonText !== "add") {
+      console.log(`Skipping non-Add button text: ${buttonText}`);
+      continue;
+    }
+
+    console.log(`Pressing safe search-result Add button for: ${seed}`);
+
+    await button.scrollIntoViewIfNeeded().catch(() => null);
+    await button.click({ timeout: 5000 });
+    await page.waitForTimeout(2000);
+
+    return true;
+  }
+
+  console.log(`No safe Add button found for: ${seed}`);
   return false;
+}
+
+function cleanButtonText(value: string) {
+  return value.replace(/\s+/g, " ").trim().toLowerCase();
 }
 
 async function addTrackThenClearSearch(page: Page, seed: string) {
@@ -202,13 +223,13 @@ async function addTrackThenClearSearch(page: Page, seed: string) {
     return false;
   }
 
-  const added = await clickFirstAddButton(page, seed);
+  const added = await clickSafeSearchResultAddButton(page, seed);
 
   console.log(`Clearing playlist search input after: ${seed}`);
   await clearPlaylistSearchInput(page);
 
   await page.keyboard.press("Escape").catch(() => null);
-  await page.waitForTimeout(1000);
+  await page.waitForTimeout(1200);
 
   return added;
 }
@@ -291,9 +312,6 @@ app.post("/spotify/browser-add-tracks", async (req, res) => {
 
     const userDataDir = path.join(process.cwd(), ".kuro-google-chrome-profile");
 
-    console.log("Launching installed Google Chrome...");
-    console.log(`Profile directory: ${userDataDir}`);
-
     context = await chromium.launchPersistentContext(userDataDir, {
       channel: "chrome",
       headless: false,
@@ -328,12 +346,9 @@ app.post("/spotify/browser-add-tracks", async (req, res) => {
 
     await page.waitForTimeout(5000);
 
-    const currentUrl = page.url();
-    const title = await page.title().catch(() => "");
-
     console.log("Spotify page loaded:", {
-      currentUrl,
-      title,
+      currentUrl: page.url(),
+      title: await page.title().catch(() => ""),
     });
 
     let tracksAdded = 0;
@@ -356,18 +371,8 @@ app.post("/spotify/browser-add-tracks", async (req, res) => {
         console.log(`Failed or skipped: ${seed}`);
       }
 
-      await page.waitForTimeout(1400);
+      await page.waitForTimeout(1500);
     }
-
-    console.log("========== KURO SPOTIFY JOB COMPLETE ==========");
-    console.log({
-      playlistName,
-      tracksAdded,
-      addedSeeds,
-      failedSeeds,
-    });
-
-    await page.waitForTimeout(10000);
 
     return res.json({
       success: true,
@@ -397,26 +402,6 @@ app.post("/spotify/browser-add-tracks", async (req, res) => {
     }
   }
 });
-
-app.use(
-  (
-    err: unknown,
-    _req: express.Request,
-    res: express.Response,
-    _next: express.NextFunction
-  ) => {
-    console.error("========== KURO EXPRESS ERROR ==========");
-    console.error(err);
-
-    res.status(500).json({
-      success: false,
-      error:
-        err instanceof Error
-          ? err.message
-          : "Unknown server error",
-    });
-  }
-);
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Kuro browser agent running on port ${PORT}`);
