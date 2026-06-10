@@ -30,6 +30,63 @@ app.use(
 
 app.use(express.json({ limit: "1mb" }));
 
+type FlightSearchRequest = {
+  prompt: string;
+  timezone?: string;
+  userLocation?: {
+    city?: string;
+    country?: string;
+  };
+};
+
+type ParsedRoute = {
+  originCity: string;
+  originAirport: string;
+  originSlug: string;
+  destinationCity: string;
+  destinationAirport: string;
+  destinationSlug: string;
+  dateText: string;
+  priority: "cheapest" | "direct" | "balanced";
+};
+
+type ScrapedFlight = {
+  title: string;
+  tag: string;
+  description: string;
+  price: string;
+  route: string;
+  airline: string;
+  departureTime: string;
+  arrivalTime: string;
+  departureTerminal: string;
+  arrivalTerminal: string;
+  duration: string;
+  stops: string;
+  tripUrl: string;
+};
+
+/* ----------------------------- shared helpers ----------------------------- */
+
+async function isVisible(locator: Locator, timeout = 1500) {
+  return locator.isVisible({ timeout }).catch(() => false);
+}
+
+function normalise(value: string) {
+  return String(value).replace(/\s+/g, " ").trim();
+}
+
+function normaliseLower(value: string) {
+  return normalise(value).toLowerCase();
+}
+
+function numberFromPrice(price: string) {
+  const match = price.replace(/,/g, "").match(/\d+/);
+  return match ? Number(match[0]) : Number.MAX_SAFE_INTEGER;
+}
+
+/* ----------------------------- Spotify helpers ----------------------------- */
+
 function getSeeds(prompt: string, selectedMood?: string, trackSeeds?: string[]) {
   if (Array.isArray(trackSeeds) && trackSeeds.length > 0) {
     return Array.from(
@@ -62,12 +119,6 @@ function getSeeds(prompt: string, selectedMood?: string, trackSeeds?: string[]) 
   ];
 }
 
-async function isVisible(locator: Locator, timeout = 1500) {
-  return locator.isVisible({ timeout }).catch(() => false);
-}
-
-/* ----------------------------- Spotify helpers ----------------------------- */
-
 async function findPlaylistSearchInput(page: Page) {
   const candidates = [
     page.getByPlaceholder(/search for songs or episodes/i).first(),
@@ -91,10 +142,7 @@ async function findPlaylistSearchInput(page: Page) {
 async function clearPlaylistSearchInput(page: Page) {
   const searchInput = await findPlaylistSearchInput(page);
 
-  if (!searchInput) {
-    console.log("Search input not found while clearing.");
-    return false;
-  }
+  if (!searchInput) return false;
 
   await searchInput.scrollIntoViewIfNeeded().catch(() => null);
   await searchInput.click({ timeout: 5000 }).catch(() => null);
@@ -115,16 +163,12 @@ async function clearPlaylistSearchInput(page: Page) {
 async function searchTrackTitle(page: Page, seed: string) {
   const searchInput = await findPlaylistSearchInput(page);
 
-  if (!searchInput) {
-    console.log("Search input not found.");
-    return false;
-  }
+  if (!searchInput) return false;
 
   await searchInput.scrollIntoViewIfNeeded().catch(() => null);
   await searchInput.click({ timeout: 5000 }).catch(() => null);
   await clearPlaylistSearchInput(page);
 
-  console.log(`Typing exact song title: ${seed}`);
   await searchInput.fill(seed, { timeout: 5000 });
   await page.waitForTimeout(3000);
 
@@ -149,7 +193,6 @@ async function clickSafeSearchResultAddButton(page: Page, seed: string) {
   );
 
   const count = await candidates.count().catch(() => 0);
-  console.log(`Found ${count} possible Add buttons for: ${seed}`);
 
   for (let index = 0; index < Math.min(count, 20); index += 1) {
     const button = candidates.nth(index);
@@ -159,10 +202,7 @@ async function clickSafeSearchResultAddButton(page: Page, seed: string) {
     const box = await button.boundingBox().catch(() => null);
     if (!box) continue;
 
-    if (inputBox && box.y < inputBox.y + inputBox.height + 20) {
-      console.log("Skipping button above search input.");
-      continue;
-    }
+    if (inputBox && box.y < inputBox.y + inputBox.height + 20) continue;
 
     const ariaLabel = await button.getAttribute("aria-label").catch(() => "");
     const text = await button.innerText().catch(() => "");
@@ -177,18 +217,13 @@ async function clickSafeSearchResultAddButton(page: Page, seed: string) {
       label.includes("menu") ||
       label.includes("close")
     ) {
-      console.log(`Skipping unsafe button label: ${label}`);
       continue;
     }
 
     const buttonText = cleanButtonText(text);
 
-    if (buttonText && buttonText !== "add") {
-      console.log(`Skipping non-Add button text: ${buttonText}`);
-      continue;
-    }
+    if (buttonText && buttonText !== "add") continue;
 
-    console.log(`Pressing safe search-result Add button for: ${seed}`);
     await button.scrollIntoViewIfNeeded().catch(() => null);
     await button.click({ timeout: 5000 });
     await page.waitForTimeout(2000);
@@ -201,9 +236,6 @@ async function clickSafeSearchResultAddButton(page: Page, seed: string) {
 }
 
 async function addTrackThenClearSearch(page: Page, seed: string) {
-  console.log("--------------------------------------------");
-  console.log(`Starting new track search: ${seed}`);
-
   await clearPlaylistSearchInput(page);
 
   const searched = await searchTrackTitle(page, seed);
@@ -212,9 +244,7 @@ async function addTrackThenClearSearch(page: Page, seed: string) {
 
   const added = await clickSafeSearchResultAddButton(page, seed);
 
-  console.log(`Clearing playlist search input after: ${seed}`);
   await clearPlaylistSearchInput(page);
-
   await page.keyboard.press("Escape").catch(() => null);
   await page.waitForTimeout(1200);
 
@@ -235,23 +265,132 @@ async function waitForSpotifyLogin(page: Page) {
     currentUrl.includes("accounts.spotify.com") ||
     loginVisible;
 
-  if (!needsLogin) {
-    console.log("Spotify already logged in.");
-    return;
-  }
-
-  console.log("Spotify login button detected.");
-  console.log("Kuro will give you 40 seconds to log in manually.");
+  if (!needsLogin) return;
 
   if (loginVisible) {
     await loginButton.click({ timeout: 5000 }).catch(() => null);
   }
 
   await page.waitForTimeout(40000);
-  console.log("40 seconds finished. Kuro will continue now.");
 }
 
-/* ----------------------------- Trip.com helpers ----------------------------- */
+/* ----------------------------- Trip helpers ----------------------------- */
+
+const cityMap: Record<
+  string,
+  {
+    city: string;
+    airport: string;
+    slug: string;
+  }
+> = {
+  singapore: { city: "Singapore", airport: "SIN", slug: "singapore" },
+  jakarta: { city: "Jakarta", airport: "CGK", slug: "jakarta" },
+  "new york": { city: "New York", airport: "NYC", slug: "new-york" },
+  nyc: { city: "New York", airport: "NYC", slug: "new-york" },
+  london: { city: "London", airport: "LON", slug: "london" },
+  tokyo: { city: "Tokyo", airport: "TYO", slug: "tokyo" },
+  bangkok: { city: "Bangkok", airport: "BKK", slug: "bangkok" },
+  seoul: { city: "Seoul", airport: "SEL", slug: "seoul" },
+  bali: { city: "Bali", airport: "DPS", slug: "bali" },
+  taipei: { city: "Taipei", airport: "TPE", slug: "taipei" },
+  shanghai: { city: "Shanghai", airport: "SHA", slug: "shanghai" },
+  beijing: { city: "Beijing", airport: "BJS", slug: "beijing" },
+  hongkong: { city: "Hong Kong", airport: "HKG", slug: "hong-kong" },
+  "hong kong": { city: "Hong Kong", airport: "HKG", slug: "hong-kong" },
+  paris: { city: "Paris", airport: "PAR", slug: "paris" },
+  sydney: { city: "Sydney", airport: "SYD", slug: "sydney" },
+};
+
+function detectCityFromPrompt(prompt: string) {
+  const text = normaliseLower(prompt);
+
+  for (const [key, value] of Object.entries(cityMap)) {
+    if (text.includes(key)) return value;
+  }
+
+  const toMatch = text.match(/\bto\s+([a-z\s]+?)(?:\s+tonight|\s+today|\s+tomorrow|\s+next|\s+cheapest|\s+direct|$)/i);
+  const rawCity = toMatch?.[1]?.trim();
+
+  if (rawCity) {
+    return {
+      city: rawCity
+        .split(" ")
+        .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+        .join(" "),
+      airport: rawCity.slice(0, 3).toUpperCase(),
+      slug: rawCity.toLowerCase().replace(/\s+/g, "-"),
+    };
+  }
+
+  return cityMap.jakarta;
+}
+
+function detectOriginFromPrompt(prompt: string, requestLocation?: FlightSearchRequest["userLocation"]) {
+  const text = normaliseLower(prompt);
+  const fromMatch = text.match(/\bfrom\s+([a-z\s]+?)\s+to\b/i);
+  const rawOrigin = fromMatch?.[1]?.trim();
+
+  if (rawOrigin) {
+    for (const [key, value] of Object.entries(cityMap)) {
+      if (rawOrigin.includes(key)) return value;
+    }
+  }
+
+  const country = requestLocation?.country?.toUpperCase();
+  const city = requestLocation?.city?.toLowerCase();
+
+  if (country === "SG" || city?.includes("singapore")) {
+    return cityMap.singapore;
+  }
+
+  return cityMap.singapore;
+}
+
+function parseFlightPrompt(body: FlightSearchRequest): ParsedRoute {
+  const prompt = body.prompt || "";
+  const text = normaliseLower(prompt);
+  const origin = detectOriginFromPrompt(prompt, body.userLocation);
+  const destination = detectCityFromPrompt(prompt);
+
+  return {
+    originCity: origin.city,
+    originAirport: origin.airport,
+    originSlug: origin.slug,
+    destinationCity: destination.city,
+    destinationAirport: destination.airport,
+    destinationSlug: destination.slug,
+    dateText: text.includes("tonight")
+      ? "tonight"
+      : text.includes("today")
+        ? "today"
+        : text.includes("tomorrow")
+          ? "tomorrow"
+          : "next available",
+    priority: text.includes("direct")
+      ? "direct"
+      : text.includes("cheapest") || text.includes("cheap")
+        ? "cheapest"
+        : "balanced",
+  };
+}
+
+function buildTripUrl(route: ParsedRoute) {
+  return `https://www.trip.com/flights/${route.originSlug}-to-${route.destinationSlug}/airfares-${route.originAirport.toLowerCase()}-${route.destinationAirport.toLowerCase()}/`;
+}
+
+function attachFlightDetails(baseUrl: string, flight: Omit<ScrapedFlight, "tripUrl">) {
+  const url = new URL(baseUrl);
+
+  url.searchParams.set("kuroAirline", flight.airline);
+  url.searchParams.set("kuroDepartureTime", flight.departureTime);
+  url.searchParams.set("kuroArrivalTime", flight.arrivalTime);
+  url.searchParams.set("kuroPrice", flight.price);
+  url.searchParams.set("kuroRoute", flight.route);
+  url.searchParams.set("kuroStops", flight.stops);
+
+  return url.toString();
+}
 
 function removeKuroParams(rawUrl: string) {
   const url = new URL(rawUrl);
@@ -272,14 +411,6 @@ function removeKuroParams(rawUrl: string) {
   return url.toString();
 }
 
-function normaliseTripText(value: string) {
-  return String(value)
-    .toLowerCase()
-    .replace(/\s+/g, " ")
-    .replace(/[^\w\s:$.-]/g, "")
-    .trim();
-}
-
 async function closeTripPopups(page: Page) {
   const buttons = [
     page.getByRole("button", { name: /close/i }).first(),
@@ -295,27 +426,134 @@ async function closeTripPopups(page: Page) {
   }
 }
 
+function parseFlightRow(text: string, route: ParsedRoute, tripUrl: string, index: number): ScrapedFlight | null {
+  const cleaned = normalise(text);
+
+  if (!cleaned.match(/select|view details/i)) return null;
+
+  const price = cleaned.match(/(?:SGD|USD|S\$|US\$)\s?[\d,]+/i)?.[0];
+  const times = cleaned.match(/\d{1,2}:\d{2}\s?(?:AM|PM)/gi) || [];
+  const duration = cleaned.match(/\d+h\s*\d*m|\d+h|\d+\s*h\s+\d+\s*m/i)?.[0];
+  const stops = cleaned.match(/nonstop|direct|\d+\s*stop[s]?/i)?.[0];
+
+  if (!price || times.length < 2) return null;
+
+  const lines = text
+    .split("\n")
+    .map((line) => normalise(line))
+    .filter(Boolean);
+
+  const badLine = /select|view details|round-trip|one-way|exclusive fare|cheapest|sgd|usd|nonstop|direct|\d+h|\d{1,2}:\d{2}|t\d/i;
+
+  const airline =
+    lines.find((line) => !badLine.test(line) && line.length <= 35) ||
+    "Trip.com result";
+
+  const terminals = lines.filter((line) =>
+    new RegExp(`${route.originAirport}|${route.destinationAirport}|T\\d`, "i").test(line)
+  );
+
+  const departureTerminal =
+    terminals.find((line) => line.toUpperCase().includes(route.originAirport)) ||
+    route.originAirport;
+
+  const arrivalTerminal =
+    terminals.find((line) => line.toUpperCase().includes(route.destinationAirport)) ||
+    route.destinationAirport;
+
+  const baseFlight = {
+    title:
+      index === 0
+        ? `${route.destinationCity} Cheapest Flight`
+        : `${route.destinationCity} Option ${index + 1}`,
+    tag: index === 0 ? "CHEAPEST" : index === 1 ? "BALANCED" : "CONVENIENT",
+    description:
+      "Kuro scraped this live Trip.com result and will select the exact matching row when approved.",
+    price,
+    route: `${route.originAirport} → ${route.destinationAirport}`,
+    airline,
+    departureTime: times[0] || "Check live timing",
+arrivalTime: times[1] || "Check live timing",
+    departureTerminal,
+    arrivalTerminal,
+    duration: duration || "Check duration",
+    stops: stops || "Check stops",
+  };
+
+  return {
+    ...baseFlight,
+    tripUrl: attachFlightDetails(tripUrl, baseFlight),
+  };
+}
+
+async function scrapeVisibleTripFlights(page: Page, route: ParsedRoute, tripUrl: string) {
+  await closeTripPopups(page);
+  await page.waitForTimeout(5000);
+
+  const rowCandidates = page.locator("div").filter({
+    hasText: /select|view details/i,
+  });
+
+  const count = await rowCandidates.count().catch(() => 0);
+  const flights: ScrapedFlight[] = [];
+  const seen = new Set<string>();
+
+  for (let index = 0; index < Math.min(count, 180); index += 1) {
+    const row = rowCandidates.nth(index);
+
+    if (!(await isVisible(row, 500))) continue;
+
+    const text = await row.innerText({ timeout: 1000 }).catch(() => "");
+    const flight = parseFlightRow(text, route, tripUrl, flights.length);
+
+    if (!flight) continue;
+
+    const key = `${flight.airline}-${flight.departureTime}-${flight.arrivalTime}-${flight.price}`;
+
+    if (seen.has(key)) continue;
+
+    seen.add(key);
+    flights.push(flight);
+
+    if (flights.length >= 6) break;
+  }
+
+  return flights
+    .sort((a, b) => numberFromPrice(a.price) - numberFromPrice(b.price))
+    .slice(0, 3)
+    .map((flight, index) => ({
+      ...flight,
+      title:
+        index === 0
+          ? `${route.destinationCity} Cheapest Flight`
+          : index === 1
+            ? `${route.destinationCity} Balanced Flight`
+            : `${route.destinationCity} Convenient Flight`,
+      tag: index === 0 ? "CHEAPEST" : index === 1 ? "BALANCED" : "CONVENIENT",
+    }));
+}
+
 function scoreTripRow(rowText: string, selected: any) {
-  const text = normaliseTripText(rowText);
+  const text = normaliseLower(rowText);
   let score = 0;
 
-  if (selected.airline && text.includes(normaliseTripText(selected.airline))) score += 5;
-  if (selected.departureTime && text.includes(normaliseTripText(selected.departureTime))) score += 4;
-  if (selected.arrivalTime && text.includes(normaliseTripText(selected.arrivalTime))) score += 4;
+  if (selected.airline && text.includes(normaliseLower(selected.airline))) score += 5;
+  if (selected.departureTime && text.includes(normaliseLower(selected.departureTime))) score += 4;
+  if (selected.arrivalTime && text.includes(normaliseLower(selected.arrivalTime))) score += 4;
 
   if (selected.price) {
-    const cleanPrice = normaliseTripText(selected.price);
+    const cleanPrice = normaliseLower(selected.price);
     const priceWithoutCurrency = cleanPrice.replace("sgd ", "").replace("sgd", "");
     if (text.includes(cleanPrice)) score += 4;
     if (priceWithoutCurrency && text.includes(priceWithoutCurrency)) score += 4;
   }
 
-  if (selected.stops && text.includes(normaliseTripText(selected.stops))) score += 2;
+  if (selected.stops && text.includes(normaliseLower(selected.stops))) score += 2;
 
   if (selected.route) {
     const parts = String(selected.route)
       .split("→")
-      .map((part) => normaliseTripText(part))
+      .map((part) => normaliseLower(part))
       .filter(Boolean);
 
     for (const part of parts) {
@@ -450,16 +688,6 @@ app.post("/spotify/browser-add-tracks", async (req, res) => {
       });
     }
 
-    console.log("========== KURO SPOTIFY JOB START ==========");
-    console.log({
-      playlistUrl,
-      playlistName,
-      selectedMood,
-      prompt,
-      trackSeeds,
-      maxTracks,
-    });
-
     const seeds = getSeeds(prompt || "", selectedMood, trackSeeds);
     const targetTrackCount =
       typeof maxTracks === "number"
@@ -501,29 +729,19 @@ app.post("/spotify/browser-add-tracks", async (req, res) => {
 
     await page.waitForTimeout(5000);
 
-    console.log("Spotify page loaded:", {
-      currentUrl: page.url(),
-      title: await page.title().catch(() => ""),
-    });
-
     let tracksAdded = 0;
     const addedSeeds: string[] = [];
     const failedSeeds: string[] = [];
 
     for (let index = 0; index < targetTrackCount; index += 1) {
       const seed = seeds[index];
-
-      console.log(`Searching song ${index + 1}/${targetTrackCount}: ${seed}`);
-
       const added = await addTrackThenClearSearch(page, seed);
 
       if (added) {
         tracksAdded += 1;
         addedSeeds.push(seed);
-        console.log(`Added successfully: ${seed}`);
       } else {
         failedSeeds.push(seed);
-        console.log(`Failed or skipped: ${seed}`);
       }
 
       await page.waitForTimeout(1500);
@@ -551,8 +769,88 @@ app.post("/spotify/browser-add-tracks", async (req, res) => {
     });
   } finally {
     if (context) {
-      console.log("Keeping Spotify Chrome open for 30 seconds before closing...");
       await new Promise((resolve) => setTimeout(resolve, 30000));
+      await context.close().catch(() => null);
+    }
+  }
+});
+
+app.post("/trip/search-flights", async (req, res) => {
+  let context: Awaited<ReturnType<typeof chromium.launchPersistentContext>> | null =
+    null;
+
+  try {
+    const body = req.body as FlightSearchRequest;
+
+    if (!body.prompt || typeof body.prompt !== "string") {
+      return res.status(400).json({
+        success: false,
+        error: "prompt is required.",
+      });
+    }
+
+    const route = parseFlightPrompt(body);
+    const tripUrl = buildTripUrl(route);
+    const userDataDir = path.join(process.cwd(), ".kuro-trip-chrome-profile");
+
+    context = await chromium.launchPersistentContext(userDataDir, {
+      channel: "chrome",
+      headless: false,
+      slowMo: 120,
+      viewport: {
+        width: 1440,
+        height: 950,
+      },
+      args: [
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+        "--disable-software-rasterizer",
+        "--start-maximized",
+      ],
+    });
+
+    const page = context.pages()[0] || (await context.newPage());
+
+    await page.goto(tripUrl, {
+      waitUntil: "domcontentloaded",
+      timeout: 60000,
+    });
+
+    await page.waitForTimeout(9000);
+
+    const flights = await scrapeVisibleTripFlights(page, route, tripUrl);
+
+    if (!flights.length) {
+      return res.status(404).json({
+        success: false,
+        error:
+          "Kuro opened Trip.com but could not scrape visible flight rows yet. Try a simpler route like Singapore to Jakarta.",
+        tripUrl,
+        route,
+      });
+    }
+
+    return res.json({
+      success: true,
+      tripUrl,
+      route,
+      flights,
+      message: `Kuro found ${flights.length} live Trip.com flight options.`,
+    });
+  } catch (error) {
+    console.error("========== KURO TRIP.COM SEARCH ERROR ==========");
+    console.error(error);
+
+    return res.status(500).json({
+      success: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Trip.com flight search failed.",
+    });
+  } finally {
+    if (context) {
+      await new Promise((resolve) => setTimeout(resolve, 5000));
       await context.close().catch(() => null);
     }
   }
@@ -571,13 +869,6 @@ app.post("/trip/open-flight", async (req, res) => {
         error: "tripUrl is required.",
       });
     }
-
-    console.log("========== KURO TRIP.COM JOB START ==========");
-    console.log({
-      tripUrl,
-      selectedFlight,
-      recommendationTitle,
-    });
 
     const userDataDir = path.join(process.cwd(), ".kuro-trip-chrome-profile");
 
@@ -632,7 +923,6 @@ app.post("/trip/open-flight", async (req, res) => {
     });
   } finally {
     if (context) {
-      console.log("Keeping Trip.com Chrome open for 30 seconds before closing...");
       await new Promise((resolve) => setTimeout(resolve, 30000));
       await context.close().catch(() => null);
     }

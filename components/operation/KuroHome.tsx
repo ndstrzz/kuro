@@ -245,7 +245,175 @@ export default function KuroHome() {
 
   async function handleSubmit() {
     if (!message.trim()) return;
+  async function handleSubmit() {
+    if (!message.trim()) return;
 
+    clearScheduledLogs();
+
+    setOperation(null);
+    setSelectedRecommendationId(null);
+    setExecuting(false);
+    setExecutionComplete(false);
+    setExecutionMessage("");
+    setBrowserStatus(emptyBrowserStatus);
+    setElapsedSeconds(0);
+    setLogs([]);
+
+    pushLog("kuro", "Executive request received.", "done");
+    scheduleLog(350, "research", "Analysing request type.");
+    scheduleLog(900, "planning", "Preparing recommendation workflow.");
+
+    const lowerMessage = message.toLowerCase();
+    const isFlightRequest =
+      lowerMessage.includes("flight") ||
+      lowerMessage.includes("airfare") ||
+      lowerMessage.includes("air ticket") ||
+      lowerMessage.includes("ticket to") ||
+      lowerMessage.includes("fly to") ||
+      lowerMessage.includes("book me a flight");
+
+    if (isFlightRequest) {
+      setExecutionMessage("Opening Trip.com to retrieve live flight options...");
+
+      setBrowserStatus({
+        connected: true,
+        surface: "Trip.com",
+        currentAction: "Searching live Trip.com flight results",
+        target: LOCAL_BROWSER_AGENT_URL,
+        status: "running",
+      });
+
+      pushLog("browser", "Sending flight search to local browser agent.", "running");
+      scheduleLog(1200, "browser", "Opening Trip.com and scraping visible flight rows.");
+      scheduleLog(2200, "planning", "Ranking live options by price and convenience.");
+
+      try {
+        const response = await fetch(`${LOCAL_BROWSER_AGENT_URL}/trip/search-flights`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            prompt: message,
+            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          }),
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || "Failed to retrieve live Trip.com flights.");
+        }
+
+        const recommendations = data.flights.map((flight: any, index: number) => ({
+          id: `trip-live-${index + 1}`,
+          kind: flight.tag,
+          title: flight.title,
+          subtitle: `${flight.route} · ${flight.price}`,
+          description: flight.description,
+          metadata: [
+            flight.price,
+            `${flight.departureTime} → ${flight.arrivalTime}`,
+            flight.airline,
+            flight.stops,
+          ],
+          tag: flight.tag,
+          flightDetails: {
+            price: flight.price,
+            route: flight.route,
+            airline: flight.airline,
+            departureTime: flight.departureTime,
+            arrivalTime: flight.arrivalTime,
+            departureTerminal: flight.departureTerminal,
+            arrivalTerminal: flight.arrivalTerminal,
+            duration: flight.duration,
+            stops: flight.stops,
+            tripUrl: flight.tripUrl,
+          },
+        }));
+
+        const nextOperation: Operation = {
+          id: `operation-${Date.now()}`,
+          userPrompt: message,
+          type: "trip",
+          recommendations,
+        };
+
+        setOperation(nextOperation);
+        setSelectedRecommendationId(nextOperation.recommendations[0]?.id ?? null);
+        setExecutionMessage("");
+
+        setBrowserStatus({
+          connected: true,
+          surface: "Trip.com",
+          currentAction: `Retrieved ${recommendations.length} live flight options`,
+          target: data.tripUrl,
+          status: "done",
+        });
+
+        pushLog("browser", data.message || "Live Trip.com options retrieved.", "done");
+        pushLog("planning", "Live flight cards prepared with price, time, route, and airline.", "done");
+        return;
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Failed to retrieve live Trip.com flights.";
+
+        setExecutionMessage(message);
+
+        setBrowserStatus({
+          connected: false,
+          surface: "Trip.com",
+          currentAction: message,
+          target: LOCAL_BROWSER_AGENT_URL,
+          status: "error",
+        });
+
+        pushLog("browser", message, "error");
+        return;
+      }
+    }
+
+    const response = await fetch("/api/operations/plan", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ prompt: message }),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      pushLog("kuro", data.error || "Failed to create operation.", "error");
+      setExecutionMessage(data.error || "Failed to create operation.");
+      return;
+    }
+
+    const nextOperation = data.operation as Operation;
+
+    setOperation(nextOperation);
+    setSelectedRecommendationId(nextOperation.recommendations[0]?.id ?? null);
+
+    if (nextOperation.type === "spotify" || nextOperation.type === "playlist") {
+      scheduleLog(
+        300,
+        "research",
+        "Broad music research complete. Spotify-ready track seeds prepared.",
+        "done"
+      );
+    } else {
+      scheduleLog(300, "research", "Research plan complete.", "done");
+    }
+
+    scheduleLog(
+      700,
+      "planning",
+      "Approval layer is ready. No external action will run without confirmation.",
+      "done"
+    );
+  }
     clearScheduledLogs();
 
     setOperation(null);
