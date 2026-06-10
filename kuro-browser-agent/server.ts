@@ -1,9 +1,7 @@
 import express from "express";
 import cors from "cors";
 import path from "path";
-import fs from "fs";
-import os from "os";
-import { chromium, Locator, Page } from "playwright";
+import { chromium, Browser, BrowserContext, Locator, Page } from "playwright";
 
 const app = express();
 const PORT = Number(process.env.PORT || 4000);
@@ -93,8 +91,10 @@ type DesktopExecuteRequest = {
   plan?: DesktopPlanStep[];
 };
 
-let desktopContext: Awaited<ReturnType<typeof chromium.launchPersistentContext>> | null =
-  null;
+let desktopBrowser: Browser | null = null;
+let desktopContext: BrowserContext | null = null;
+
+const OPERA_CDP_ENDPOINT = "http://127.0.0.1:9222";
 
 async function isVisible(locator: Locator, timeout = 1500) {
   return locator.isVisible({ timeout }).catch(() => false);
@@ -108,71 +108,32 @@ function normaliseLower(value: string) {
   return normalise(value).toLowerCase();
 }
 
-function getOperaExecutablePath() {
-  const platform = os.platform();
-
-  const possiblePaths =
-    platform === "darwin"
-      ? [
-          "/Applications/Opera.app/Contents/MacOS/Opera",
-          "/Applications/Opera GX.app/Contents/MacOS/Opera GX",
-        ]
-      : platform === "win32"
-        ? [
-            path.join(
-              process.env.LOCALAPPDATA || "",
-              "Programs",
-              "Opera",
-              "opera.exe"
-            ),
-            path.join(
-              process.env.LOCALAPPDATA || "",
-              "Programs",
-              "Opera GX",
-              "opera.exe"
-            ),
-            "C:\\Program Files\\Opera\\opera.exe",
-            "C:\\Program Files\\Opera GX\\opera.exe",
-          ]
-        : [
-            "/usr/bin/opera",
-            "/usr/bin/opera-stable",
-            "/snap/bin/opera",
-          ];
-
-  return possiblePaths.find((item) => item && fs.existsSync(item));
-}
-
-function getBrowserLaunchOptions() {
-  const operaPath = getOperaExecutablePath();
-
-  const baseOptions = {
-    headless: false,
-    slowMo: 120,
-    viewport: {
-      width: 1440,
-      height: 950,
-    },
-    args: [
-      "--disable-dev-shm-usage",
-      "--disable-gpu",
-      "--disable-software-rasterizer",
-      "--start-maximized",
-    ],
-  };
-
-  if (operaPath) {
-    return {
-      ...baseOptions,
-      executablePath: operaPath,
-    };
+function getOperaLaunchCommand() {
+  if (process.platform === "darwin") {
+    return "/Applications/Opera.app/Contents/MacOS/Opera --remote-debugging-port=9222";
   }
 
-  console.warn("Opera was not found. Falling back to Chrome channel.");
-  return {
-    ...baseOptions,
-    channel: "chrome" as const,
-  };
+  if (process.platform === "win32") {
+    return 'start "" "%LOCALAPPDATA%\\Programs\\Opera\\opera.exe" --remote-debugging-port=9222';
+  }
+
+  return "opera --remote-debugging-port=9222";
+}
+
+async function connectToExistingOpera() {
+  if (!desktopBrowser) {
+    console.log(`Connecting to your existing Opera session at ${OPERA_CDP_ENDPOINT}...`);
+    desktopBrowser = await chromium.connectOverCDP(OPERA_CDP_ENDPOINT);
+    console.log("Connected to your existing Opera session.");
+  }
+
+  const contexts = desktopBrowser.contexts();
+
+  if (!desktopContext) {
+    desktopContext = contexts[0] || (await desktopBrowser.newContext());
+  }
+
+  return desktopContext;
 }
 
 /* ----------------------------- Desktop Agent ----------------------------- */
@@ -225,8 +186,8 @@ function buildDesktopPlan(prompt: string): DesktopPlanStep[] {
   if (text.includes("gmail") || text.includes("email") || text.includes("inbox")) {
     steps.push({
       id: "step_002",
-      title: "Open Gmail in Kuro Workspace",
-      description: "Kuro will open Gmail inside the dedicated Opera workspace.",
+      title: "Open Gmail in your Opera",
+      description: "Kuro will open Gmail inside your existing logged-in Opera session.",
       action: "open_gmail",
       value: "https://mail.google.com",
       safetyLevel: "safe",
@@ -242,8 +203,8 @@ function buildDesktopPlan(prompt: string): DesktopPlanStep[] {
   } else if (text.includes("calendar") || text.includes("schedule")) {
     steps.push({
       id: "step_002",
-      title: "Open Google Calendar in Kuro Workspace",
-      description: "Kuro will open Google Calendar in Opera.",
+      title: "Open Google Calendar in your Opera",
+      description: "Kuro will open Google Calendar inside your existing Opera session.",
       action: "open_calendar",
       value: "https://calendar.google.com",
       safetyLevel: "safe",
@@ -258,8 +219,8 @@ function buildDesktopPlan(prompt: string): DesktopPlanStep[] {
 
     steps.push({
       id: "step_002",
-      title: "Search the web in Kuro Workspace",
-      description: "Kuro will open Opera and search the requested topic.",
+      title: "Search the web in your Opera",
+      description: "Kuro will use your existing Opera session to search the requested topic.",
       action: "search_web",
       value: query || prompt,
       safetyLevel: "safe",
@@ -268,7 +229,7 @@ function buildDesktopPlan(prompt: string): DesktopPlanStep[] {
     steps.push({
       id: "step_002",
       title: "Open relevant workspace",
-      description: "Kuro will open the most relevant website in Opera.",
+      description: "Kuro will open the most relevant website inside your existing Opera session.",
       action: "open_url",
       value: inferUrlFromPrompt(prompt),
       safetyLevel: "safe",
@@ -290,16 +251,23 @@ function buildDesktopPlan(prompt: string): DesktopPlanStep[] {
 }
 
 async function getDesktopPage() {
-  const userDataDir = path.join(process.cwd(), ".kuro-opera-workspace-profile");
+  try {
+    const context = await connectToExistingOpera();
+    const pages = context.pages();
+    const usablePage =
+      pages.find((page) => !page.isClosed()) || (await context.newPage());
 
-  if (!desktopContext) {
-    desktopContext = await chromium.launchPersistentContext(
-      userDataDir,
-      getBrowserLaunchOptions()
+    await usablePage.bringToFront().catch(() => null);
+
+    return usablePage;
+  } catch (error) {
+    console.error("Could not connect to your existing Opera session.");
+    console.error(error);
+
+    throw new Error(
+      `Kuro could not connect to your current Opera. Please fully close Opera, then reopen it from Terminal with: ${getOperaLaunchCommand()}`
     );
   }
-
-  return desktopContext.pages()[0] || (await desktopContext.newPage());
 }
 
 async function executeDesktopStep(page: Page, step: DesktopPlanStep) {
@@ -343,7 +311,7 @@ async function executeDesktopStep(page: Page, step: DesktopPlanStep) {
       step,
       success: true,
       url: page.url(),
-      message: `Kuro opened ${url} in Opera Workspace.`,
+      message: `Kuro opened ${url} in your existing Opera session.`,
     };
   }
 
@@ -361,7 +329,7 @@ async function executeDesktopStep(page: Page, step: DesktopPlanStep) {
       step,
       success: true,
       url: page.url(),
-      message: `Kuro searched Google for "${query}" in Opera Workspace.`,
+      message: `Kuro searched Google for "${query}" in your existing Opera session.`,
     };
   }
 
@@ -377,7 +345,7 @@ async function executeDesktopStep(page: Page, step: DesktopPlanStep) {
       step,
       success: true,
       extractedText: pageText.slice(0, 4000),
-      message: "Kuro extracted visible page text from Opera Workspace.",
+      message: "Kuro extracted visible page text from the active Opera page.",
     };
   }
 
@@ -791,7 +759,7 @@ app.get("/", (_req, res) => {
     success: true,
     service: "Kuro Executive OS Agent",
     status: "running",
-    browser: getOperaExecutablePath() ? "Opera Workspace" : "Chrome fallback",
+    browser: "Your existing Opera session via port 9222",
     modules: ["desktop", "gmail", "spotify"],
     safety:
       "Kuro can open and read apps/sites, but will stop before sending, deleting, purchasing, paying, or submitting.",
@@ -818,7 +786,7 @@ app.post("/desktop/plan", async (req, res) => {
       prompt: body.prompt,
       plan,
       approvalRequired: true,
-      browser: getOperaExecutablePath() ? "Opera Workspace" : "Chrome fallback",
+      browser: "Your existing Opera session via port 9222",
       message: "Kuro prepared a permission-first desktop action plan.",
     });
   } catch (error) {
@@ -854,10 +822,10 @@ app.post("/desktop/execute", async (req, res) => {
 
     return res.json({
       success: true,
-      browser: getOperaExecutablePath() ? "Opera Workspace" : "Chrome fallback",
+      browser: "Your existing Opera session via port 9222",
       results,
       currentUrl: page.url(),
-      message: "Kuro executed the approved safe desktop steps in Opera Workspace.",
+      message: "Kuro executed the approved safe desktop steps in your existing Opera session.",
     });
   } catch (error) {
     console.error("========== KURO DESKTOP EXECUTE ERROR ==========");
@@ -893,9 +861,9 @@ app.post("/desktop/open-url", async (req, res) => {
 
     return res.json({
       success: true,
-      browser: getOperaExecutablePath() ? "Opera Workspace" : "Chrome fallback",
+      browser: "Your existing Opera session via port 9222",
       openedUrl: page.url(),
-      message: `Kuro opened ${body.url} in Opera Workspace.`,
+      message: `Kuro opened ${body.url} in your existing Opera session.`,
     });
   } catch (error) {
     console.error("========== KURO OPEN URL ERROR ==========");
@@ -936,11 +904,11 @@ app.post("/desktop/search-web", async (req, res) => {
 
     return res.json({
       success: true,
-      browser: getOperaExecutablePath() ? "Opera Workspace" : "Chrome fallback",
+      browser: "Your existing Opera session via port 9222",
       query: body.query,
       openedUrl: page.url(),
       visibleText: text.slice(0, 4000),
-      message: `Kuro searched the web for "${body.query}" in Opera Workspace.`,
+      message: `Kuro searched the web for "${body.query}" in your existing Opera session.`,
     });
   } catch (error) {
     console.error("========== KURO SEARCH WEB ERROR ==========");
@@ -966,10 +934,10 @@ app.post("/desktop/open-gmail", async (_req, res) => {
 
     return res.json({
       success: true,
-      browser: getOperaExecutablePath() ? "Opera Workspace" : "Chrome fallback",
+      browser: "Your existing Opera session via port 9222",
       openedUrl: page.url(),
       message:
-        "Kuro opened Gmail in Opera Workspace. If login is required, please log in manually. Kuro will not send emails without approval.",
+        "Kuro opened Gmail in your existing Opera session. Kuro will not send emails without approval.",
     });
   } catch (error) {
     console.error("========== KURO OPEN GMAIL ERROR ==========");
@@ -995,10 +963,10 @@ app.post("/desktop/open-calendar", async (_req, res) => {
 
     return res.json({
       success: true,
-      browser: getOperaExecutablePath() ? "Opera Workspace" : "Chrome fallback",
+      browser: "Your existing Opera session via port 9222",
       openedUrl: page.url(),
       message:
-        "Kuro opened Google Calendar in Opera Workspace. Kuro will not create or edit events without approval.",
+        "Kuro opened Google Calendar in your existing Opera session. Kuro will not create or edit events without approval.",
     });
   } catch (error) {
     console.error("========== KURO OPEN CALENDAR ERROR ==========");
@@ -1022,10 +990,10 @@ app.post("/desktop/extract-visible-text", async (_req, res) => {
 
     return res.json({
       success: true,
-      browser: getOperaExecutablePath() ? "Opera Workspace" : "Chrome fallback",
+      browser: "Your existing Opera session via port 9222",
       currentUrl: page.url(),
       visibleText: text.slice(0, 8000),
-      message: "Kuro extracted visible text from the active Opera Workspace page.",
+      message: "Kuro extracted visible text from the active Opera page.",
     });
   } catch (error) {
     console.error("========== KURO EXTRACT TEXT ERROR ==========");
@@ -1040,23 +1008,25 @@ app.post("/desktop/extract-visible-text", async (_req, res) => {
 
 app.post("/desktop/close", async (_req, res) => {
   try {
-    if (desktopContext) {
-      await desktopContext.close().catch(() => null);
+    if (desktopBrowser) {
+      await desktopBrowser.close().catch(() => null);
+      desktopBrowser = null;
       desktopContext = null;
     }
 
     return res.json({
       success: true,
-      message: "Kuro closed the Opera Workspace session.",
+      message:
+        "Kuro disconnected from Opera. Your actual Opera app and tabs should remain open.",
     });
   } catch (error) {
     console.error("========== KURO DESKTOP CLOSE ERROR ==========");
     console.error(error);
 
-    return res.status(500).json({
+    res.status(500).json({
       success: false,
       error:
-        error instanceof Error ? error.message : "Kuro could not close the desktop browser.",
+        error instanceof Error ? error.message : "Kuro could not disconnect from Opera.",
     });
   }
 });
@@ -1320,9 +1290,6 @@ app.use(
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Kuro Executive OS Agent running on port ${PORT}`);
-  console.log(
-    getOperaExecutablePath()
-      ? `Opera Workspace connected: ${getOperaExecutablePath()}`
-      : "Opera not found. Falling back to Chrome."
-  );
+  console.log(`Desktop agent target: existing Opera via ${OPERA_CDP_ENDPOINT}`);
+  console.log(`If Opera is not connected, launch it with: ${getOperaLaunchCommand()}`);
 });

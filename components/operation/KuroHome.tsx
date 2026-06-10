@@ -7,7 +7,6 @@ import {
   CalendarDays,
   CheckCircle2,
   Compass,
-  ExternalLink,
   Mail,
   Music,
   RotateCcw,
@@ -23,16 +22,11 @@ import ExecutiveTimeline, {
 } from "@/components/operation/ExecutiveTimeline";
 import AgentNetworkCard from "@/components/cards/AgentNetworkCard";
 import RecommendationGrid from "@/components/recommendations/RecommendationGrid";
-import type { Operation, Recommendation } from "@/types/operation";
+import type { Operation } from "@/types/operation";
 
 const LOCAL_BROWSER_AGENT_URL = "http://localhost:4000";
 
 const suggestions = [
-  {
-    icon: Mail,
-    title: "Morning Brief",
-    prompt: "Good morning Kuro, prepare my executive brief",
-  },
   {
     icon: Mail,
     title: "Gmail",
@@ -46,7 +40,7 @@ const suggestions = [
   {
     icon: Search,
     title: "Research",
-    prompt: "Research the best tools for AI agents",
+    prompt: "Search the web for the best AI hackathon ideas",
   },
   {
     icon: Music,
@@ -63,11 +57,9 @@ const emptyBrowserStatus: BrowserStatus = {
   status: "waiting",
 };
 
-type ChatRole = "user" | "kuro";
-
 type ChatMessage = {
   id: string;
-  role: ChatRole;
+  role: "user" | "kuro";
   content: string;
 };
 
@@ -92,12 +84,14 @@ type DesktopPlanResponse = {
   prompt: string;
   plan: DesktopPlanStep[];
   approvalRequired: boolean;
+  browser?: string;
   message: string;
   error?: string;
 };
 
 type DesktopExecuteResponse = {
   success: boolean;
+  browser?: string;
   results: Array<{
     step: DesktopPlanStep;
     success: boolean;
@@ -139,10 +133,10 @@ function getDesktopSurface(prompt: string) {
   }
 
   if (text.includes("search") || text.includes("research") || text.includes("find")) {
-    return "Google Search";
+    return "Opera Search";
   }
 
-  return "Desktop Agent";
+  return "Opera Workspace";
 }
 
 function buildFallbackDesktopPlan(prompt: string): DesktopPlanStep[] {
@@ -159,13 +153,13 @@ function buildFallbackDesktopPlan(prompt: string): DesktopPlanStep[] {
     {
       id: "step_002",
       title: `Open ${surface}`,
-      description: `Kuro will open ${surface} in a controlled browser window.`,
+      description: `Kuro will open ${surface} using your Opera session.`,
       action:
         surface === "Gmail"
           ? "open_gmail"
           : surface === "Google Calendar"
             ? "open_calendar"
-            : surface === "Google Search"
+            : surface === "Opera Search"
               ? "search_web"
               : "open_url",
       value:
@@ -210,7 +204,7 @@ export default function KuroHome() {
       id: "welcome",
       role: "kuro",
       content:
-        "Hi Andy. Tell me what you want me to do. For normal requests, I will stay on this screen and work like a ChatGPT-style executive agent. For Spotify, I will keep the existing playlist automation flow.",
+        "Hi Andy. Ask me anything. For normal requests, I will stay on this screen, plan safely, then use your Opera session after approval. Spotify stays on the existing playlist flow.",
     },
   ]);
 
@@ -236,7 +230,7 @@ export default function KuroHome() {
   const actionLabel = useMemo(() => {
     if (executionComplete) return "Mission complete";
     if (executing && isSpotifyOperation) return "Creating playlist...";
-    if (executing && desktopMode) return "Executing desktop plan...";
+    if (executing && desktopMode) return "Running in Opera...";
     if (isSpotifyOperation) return "Create Playlist";
     if (desktopMode) return "Approve & Run";
     return "Approve Mission";
@@ -265,8 +259,8 @@ export default function KuroHome() {
         },
         {
           id: "execution",
-          title: "Desktop Agent",
-          description: "Browser handoff has not started.",
+          title: "Opera Workspace",
+          description: "Browser control has not started.",
           status: "waiting",
         },
       ];
@@ -295,16 +289,16 @@ export default function KuroHome() {
             ? "Approved safe steps completed."
             : executing
               ? "Approval received. Running only safe actions."
-              : "Waiting for approval before controlling browser.",
+              : "Waiting for approval before using Opera.",
           status: executionComplete || executing ? "done" : "active",
         },
         {
           id: "execution",
-          title: "Desktop Execution",
+          title: "Opera Execution",
           description: executionComplete
-            ? "Kuro completed the safe browser steps."
+            ? "Kuro completed the safe Opera steps."
             : executing
-              ? "Kuro is opening and reading the approved workspace."
+              ? "Kuro is controlling your approved Opera workspace."
               : "Ready to run approved steps.",
           status: executionComplete ? "done" : executing ? "active" : "waiting",
         },
@@ -468,7 +462,7 @@ export default function KuroHome() {
     setDesktopMode(true);
     setDesktopPrompt(prompt);
     setPlanningLoading(true);
-    setExecutionMessage("Kuro is preparing a permission-first desktop plan...");
+    setExecutionMessage("Kuro is preparing a permission-first Opera plan...");
 
     setBrowserStatus({
       connected: false,
@@ -497,7 +491,7 @@ export default function KuroHome() {
         throw new Error(data.error || "Failed to prepare desktop plan.");
       }
 
-      await sleep(900);
+      await sleep(700);
 
       setDesktopPlan(data.plan);
       setPlanningLoading(false);
@@ -506,13 +500,13 @@ export default function KuroHome() {
       setBrowserStatus({
         connected: true,
         surface: getDesktopSurface(prompt),
-        currentAction: "Desktop plan ready for approval",
-        target: LOCAL_BROWSER_AGENT_URL,
+        currentAction: "Opera action plan ready for approval",
+        target: data.browser || LOCAL_BROWSER_AGENT_URL,
         status: "done",
       });
 
       pushLog("planning", data.message || "Desktop plan prepared.", "done");
-      pushLog("approval", "Waiting for approval before browser control.", "done");
+      pushLog("approval", "Waiting for approval before Opera control.", "done");
 
       setChatMessages((current) => [
         ...current,
@@ -520,7 +514,7 @@ export default function KuroHome() {
           id: `${Date.now()}-kuro`,
           role: "kuro",
           content:
-            "I prepared a safe desktop action plan. I can open and read approved apps or websites, but I will stop before sending, deleting, paying, submitting, or changing anything.",
+            "I prepared a safe action plan. I can use your existing Opera session after approval, but I will stop before sending, deleting, paying, submitting, or changing anything.",
         },
       ]);
     } catch (error) {
@@ -551,7 +545,7 @@ export default function KuroHome() {
           id: `${Date.now()}-kuro`,
           role: "kuro",
           content:
-            "I could not reach the local desktop agent, so I prepared a fallback plan on-screen. Make sure `kuro-browser-agent` is running on localhost:4000 before executing.",
+            "I could not reach the local Opera agent. Make sure your browser agent is running on localhost:4000 and Opera was opened with remote debugging.",
         },
       ]);
     }
@@ -689,18 +683,18 @@ export default function KuroHome() {
 
     setExecuting(true);
     setExecutionComplete(false);
-    setExecutionMessage("Kuro is executing the approved safe desktop steps...");
+    setExecutionMessage("Kuro is running the approved safe steps in Opera...");
 
     setBrowserStatus({
       connected: false,
       surface: getDesktopSurface(desktopPrompt),
-      currentAction: "Calling localhost desktop agent",
+      currentAction: "Calling localhost Opera agent",
       target: `${LOCAL_BROWSER_AGENT_URL}/desktop/execute`,
       status: "running",
     });
 
-    pushLog("approval", "Human approval received for desktop agent execution.", "done");
-    scheduleLog(350, "browser", "Opening controlled Chrome session.");
+    pushLog("approval", "Human approval received for Opera execution.", "done");
+    scheduleLog(350, "browser", "Connecting to your existing Opera session.");
     scheduleLog(1000, "browser", "Running approved safe actions only.");
     scheduleLog(1700, "browser", "Stopping before sensitive actions.");
 
@@ -723,7 +717,7 @@ export default function KuroHome() {
       const data = (await response.json()) as DesktopExecuteResponse;
 
       if (!response.ok || !data.success) {
-        throw new Error(data.error || "Local desktop agent failed.");
+        throw new Error(data.error || "Local Opera agent failed.");
       }
 
       const extractedText = data.results
@@ -734,23 +728,23 @@ export default function KuroHome() {
 
       const finalMessage =
         extractedText.length > 0
-          ? `Done. I opened the workspace and extracted visible text. Summary preview: ${extractedText}`
-          : data.message || "Kuro completed the approved desktop steps.";
+          ? `Done. I opened the workspace and extracted visible text. Preview: ${extractedText}`
+          : data.message || "Kuro completed the approved Opera steps.";
 
-      setExecutionMessage(data.message || "Desktop mission completed safely.");
+      setExecutionMessage(data.message || "Opera mission completed safely.");
       setExecuting(false);
       setExecutionComplete(true);
 
       setBrowserStatus({
         connected: true,
         surface: getDesktopSurface(desktopPrompt),
-        currentAction: "Safe desktop execution completed",
+        currentAction: "Safe Opera execution completed",
         target: data.currentUrl || LOCAL_BROWSER_AGENT_URL,
         status: "done",
       });
 
-      pushLog("browser", data.message || "Desktop execution completed.", "done");
-      pushLog("kuro", "Desktop mission complete.", "done");
+      pushLog("browser", data.message || "Opera execution completed.", "done");
+      pushLog("kuro", "Mission complete.", "done");
 
       setChatMessages((current) => [
         ...current,
@@ -998,13 +992,13 @@ export default function KuroHome() {
                 Good evening, Andy.
               </h1>
               <p className="mx-auto mt-4 max-w-xl text-sm leading-relaxed text-white/45 md:text-base">
-                Ask anything. I will plan it safely, ask for approval, then use the desktop agent only when needed.
+                Ask anything. I will plan safely, ask for approval, then use your Opera workspace only when needed.
               </p>
             </div>
 
             <ChatPanel messages={chatMessages} />
 
-            <div className="mt-6 grid w-full max-w-4xl grid-cols-2 gap-3 md:grid-cols-5">
+            <div className="mt-6 grid w-full max-w-4xl grid-cols-2 gap-3 md:grid-cols-4">
               {suggestions.map((item) => {
                 const Icon = item.icon;
 
@@ -1036,7 +1030,7 @@ export default function KuroHome() {
                   </div>
                   <div>
                     <p className="text-xs uppercase tracking-[0.25em] text-white/35">
-                      ChatGPT-style desktop agent
+                      ChatGPT-style Opera agent
                     </p>
                     <h2 className="mt-1 text-xl font-semibold md:text-2xl">
                       {getDesktopSurface(desktopPrompt)}
@@ -1061,7 +1055,7 @@ export default function KuroHome() {
                   “{desktopPrompt}”
                 </h1>
                 <p className="mt-4 text-sm leading-relaxed text-white/45">
-                  Kuro will keep this request on one screen, show the plan, ask for permission, and only then control the browser safely.
+                  Kuro will keep this request on one screen, show the plan, ask for permission, and only then use your existing Opera session.
                 </p>
               </div>
 
@@ -1099,11 +1093,11 @@ export default function KuroHome() {
                   </h3>
 
                   <p className="mt-3 text-sm leading-relaxed text-white/45">
-                    Kuro can open approved websites, search, read visible text, and help you prepare next steps. It stops before sensitive actions.
+                    Kuro can open approved websites, search, read visible text, and help prepare next steps. It stops before sensitive actions.
                   </p>
 
                   <div className="mt-5 space-y-3">
-                    <SafetyItem text="Can open Gmail, Calendar, Google, and web apps" done />
+                    <SafetyItem text="Uses your existing Opera session" done />
                     <SafetyItem text="Can read visible page text after approval" done />
                     <SafetyItem text="Will not send emails without approval" />
                     <SafetyItem text="Will not delete, pay, buy, submit, or install" />
@@ -1405,7 +1399,7 @@ function DesktopLoadingPanel() {
         </div>
 
         <div>
-          <h3 className="text-xl font-semibold">Preparing desktop plan</h3>
+          <h3 className="text-xl font-semibold">Preparing Opera plan</h3>
           <p className="mt-1 text-sm text-white/45">
             Kuro is checking the request, app target, and safety rules.
           </p>
