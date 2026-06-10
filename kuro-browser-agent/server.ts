@@ -66,8 +66,6 @@ type ScrapedFlight = {
   tripUrl: string;
 };
 
-/* ----------------------------- shared helpers ----------------------------- */
-
 async function isVisible(locator: Locator, timeout = 1500) {
   return locator.isVisible({ timeout }).catch(() => false);
 }
@@ -90,11 +88,7 @@ function numberFromPrice(price: string) {
 function getSeeds(prompt: string, selectedMood?: string, trackSeeds?: string[]) {
   if (Array.isArray(trackSeeds) && trackSeeds.length > 0) {
     return Array.from(
-      new Set(
-        trackSeeds
-          .map((track) => String(track).trim())
-          .filter(Boolean)
-      )
+      new Set(trackSeeds.map((track) => String(track).trim()).filter(Boolean))
     ).slice(0, 12);
   }
 
@@ -276,14 +270,7 @@ async function waitForSpotifyLogin(page: Page) {
 
 /* ----------------------------- Trip helpers ----------------------------- */
 
-const cityMap: Record<
-  string,
-  {
-    city: string;
-    airport: string;
-    slug: string;
-  }
-> = {
+const cityMap: Record<string, { city: string; airport: string; slug: string }> = {
   singapore: { city: "Singapore", airport: "SIN", slug: "singapore" },
   jakarta: { city: "Jakarta", airport: "CGK", slug: "jakarta" },
   "new york": { city: "New York", airport: "NYC", slug: "new-york" },
@@ -309,7 +296,10 @@ function detectCityFromPrompt(prompt: string) {
     if (text.includes(key)) return value;
   }
 
-  const toMatch = text.match(/\bto\s+([a-z\s]+?)(?:\s+tonight|\s+today|\s+tomorrow|\s+next|\s+cheapest|\s+direct|$)/i);
+  const toMatch = text.match(
+    /\bto\s+([a-z\s]+?)(?:\s+tonight|\s+today|\s+tomorrow|\s+next|\s+cheapest|\s+direct|$)/i
+  );
+
   const rawCity = toMatch?.[1]?.trim();
 
   if (rawCity) {
@@ -326,7 +316,10 @@ function detectCityFromPrompt(prompt: string) {
   return cityMap.jakarta;
 }
 
-function detectOriginFromPrompt(prompt: string, requestLocation?: FlightSearchRequest["userLocation"]) {
+function detectOriginFromPrompt(
+  prompt: string,
+  requestLocation?: FlightSearchRequest["userLocation"]
+) {
   const text = normaliseLower(prompt);
   const fromMatch = text.match(/\bfrom\s+([a-z\s]+?)\s+to\b/i);
   const rawOrigin = fromMatch?.[1]?.trim();
@@ -416,6 +409,8 @@ async function closeTripPopups(page: Page) {
     page.getByRole("button", { name: /close/i }).first(),
     page.locator('[aria-label="Close"]').first(),
     page.locator("button").filter({ hasText: /^×$/ }).first(),
+    page.locator("button").filter({ hasText: /^No thanks$/i }).first(),
+    page.locator("button").filter({ hasText: /^Not now$/i }).first(),
   ];
 
   for (const button of buttons) {
@@ -426,10 +421,74 @@ async function closeTripPopups(page: Page) {
   }
 }
 
-function parseFlightRow(text: string, route: ParsedRoute, tripUrl: string, index: number): ScrapedFlight | null {
+async function fillTripTextbox(page: Page, label: RegExp, value: string) {
+  const candidates = [
+    page.getByRole("textbox", { name: label }).first(),
+    page.getByPlaceholder(label).first(),
+    page.locator("input").filter({ hasText: label }).first(),
+  ];
+
+  for (const candidate of candidates) {
+    if (await isVisible(candidate, 1500)) {
+      await candidate.click({ timeout: 3000 }).catch(() => null);
+      await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
+      await page.keyboard.press("Backspace");
+      await candidate.fill(value, { timeout: 3000 }).catch(() => null);
+      await page.waitForTimeout(1000);
+      await page.keyboard.press("Enter").catch(() => null);
+      await page.waitForTimeout(800);
+      return true;
+    }
+  }
+
+  return false;
+}
+
+async function tryFillTripSearchForm(page: Page, route: ParsedRoute) {
+  await closeTripPopups(page);
+
+  const bodyText = await page.locator("body").innerText({ timeout: 4000 }).catch(() => "");
+
+  const likelySearchForm =
+    /from|to|depart|departure|search/i.test(bodyText) &&
+    !/select|view details|sgd|usd|nonstop/i.test(bodyText);
+
+  if (!likelySearchForm) {
+    return false;
+  }
+
+  console.log("Trip.com appears to show a search form. Trying to fill it.");
+
+  await fillTripTextbox(page, /from|origin|departure/i, route.originCity);
+  await fillTripTextbox(page, /^to$|destination|arrival/i, route.destinationCity);
+
+  const searchButtons = [
+    page.getByRole("button", { name: /search/i }).first(),
+    page.locator('button:has-text("Search")').first(),
+    page.locator('[role="button"]:has-text("Search")').first(),
+  ];
+
+  for (const button of searchButtons) {
+    if (await isVisible(button, 2500)) {
+      await button.click({ timeout: 5000 }).catch(() => null);
+      await page.waitForTimeout(9000);
+      await closeTripPopups(page);
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function parseFlightRow(
+  text: string,
+  route: ParsedRoute,
+  tripUrl: string,
+  index: number
+): ScrapedFlight | null {
   const cleaned = normalise(text);
 
-  if (!cleaned.match(/select|view details/i)) return null;
+  if (!cleaned.match(/select|view details|book/i)) return null;
 
   const price = cleaned.match(/(?:SGD|USD|S\$|US\$)\s?[\d,]+/i)?.[0];
   const times = cleaned.match(/\d{1,2}:\d{2}\s?(?:AM|PM)/gi) || [];
@@ -443,10 +502,11 @@ function parseFlightRow(text: string, route: ParsedRoute, tripUrl: string, index
     .map((line) => normalise(line))
     .filter(Boolean);
 
-  const badLine = /select|view details|round-trip|one-way|exclusive fare|cheapest|sgd|usd|nonstop|direct|\d+h|\d{1,2}:\d{2}|t\d/i;
+  const badLine =
+    /select|view details|round-trip|one-way|exclusive fare|cheapest|sgd|usd|nonstop|direct|\d+h|\d{1,2}:\d{2}|t\d|from|to/i;
 
   const airline =
-    lines.find((line) => !badLine.test(line) && line.length <= 35) ||
+    lines.find((line) => !badLine.test(line) && line.length >= 2 && line.length <= 35) ||
     "Trip.com result";
 
   const terminals = lines.filter((line) =>
@@ -473,7 +533,7 @@ function parseFlightRow(text: string, route: ParsedRoute, tripUrl: string, index
     route: `${route.originAirport} → ${route.destinationAirport}`,
     airline,
     departureTime: times[0] || "Check live timing",
-arrivalTime: times[1] || "Check live timing",
+    arrivalTime: times[1] || "Check live timing",
     departureTerminal,
     arrivalTerminal,
     duration: duration || "Check duration",
@@ -490,15 +550,24 @@ async function scrapeVisibleTripFlights(page: Page, route: ParsedRoute, tripUrl:
   await closeTripPopups(page);
   await page.waitForTimeout(5000);
 
-  const rowCandidates = page.locator("div").filter({
-    hasText: /select|view details/i,
+  let rowCandidates = page.locator("div").filter({
+    hasText: /SGD|USD|S\$|US\$/i,
   });
 
-  const count = await rowCandidates.count().catch(() => 0);
+  let count = await rowCandidates.count().catch(() => 0);
+
+  if (count < 2) {
+    rowCandidates = page.locator("div").filter({
+      hasText: /select|view details|book/i,
+    });
+
+    count = await rowCandidates.count().catch(() => 0);
+  }
+
   const flights: ScrapedFlight[] = [];
   const seen = new Set<string>();
 
-  for (let index = 0; index < Math.min(count, 180); index += 1) {
+  for (let index = 0; index < Math.min(count, 220); index += 1) {
     const row = rowCandidates.nth(index);
 
     if (!(await isVisible(row, 500))) continue;
@@ -515,7 +584,7 @@ async function scrapeVisibleTripFlights(page: Page, route: ParsedRoute, tripUrl:
     seen.add(key);
     flights.push(flight);
 
-    if (flights.length >= 6) break;
+    if (flights.length >= 8) break;
   }
 
   return flights
@@ -564,7 +633,7 @@ function scoreTripRow(rowText: string, selected: any) {
   return score;
 }
 
-async function clickTripSelectButton(row: Locator) {
+async function clickTripSelectButton(page: Page, row: Locator) {
   const buttonCandidates = [
     row.getByRole("button", { name: /select|view details|continue|book/i }).first(),
     row.locator('button:has-text("Select")').first(),
@@ -577,7 +646,7 @@ async function clickTripSelectButton(row: Locator) {
     if (await isVisible(button, 3000)) {
       await button.scrollIntoViewIfNeeded().catch(() => null);
       await button.click({ timeout: 5000 });
-      await row.page().waitForTimeout(3000);
+      await page.waitForTimeout(3000);
       return true;
     }
   }
@@ -592,6 +661,7 @@ async function selectMatchingTripFlight(page: Page, selected: any) {
 
   const rowCandidates = [
     page.locator("div").filter({ hasText: rowBaseText }),
+    page.locator("div").filter({ hasText: /SGD|USD|S\$|US\$/i }),
     page.locator('[class*="flight"], [class*="Flight"], [class*="card"], [class*="Card"]'),
     page.locator("body div"),
   ];
@@ -603,7 +673,7 @@ async function selectMatchingTripFlight(page: Page, selected: any) {
   for (const rows of rowCandidates) {
     const count = await rows.count().catch(() => 0);
 
-    for (let index = 0; index < Math.min(count, 160); index += 1) {
+    for (let index = 0; index < Math.min(count, 180); index += 1) {
       const row = rows.nth(index);
 
       if (!(await isVisible(row, 500))) continue;
@@ -627,7 +697,7 @@ async function selectMatchingTripFlight(page: Page, selected: any) {
   console.log("Best Trip.com row text:", bestText.slice(0, 500));
 
   if (bestRow && bestScore >= 4) {
-    const clicked = await clickTripSelectButton(bestRow);
+    const clicked = await clickTripSelectButton(page, bestRow);
 
     if (clicked) {
       return {
@@ -816,15 +886,21 @@ app.post("/trip/search-flights", async (req, res) => {
       timeout: 60000,
     });
 
-    await page.waitForTimeout(9000);
+    await page.waitForTimeout(7000);
+    await closeTripPopups(page);
 
-    const flights = await scrapeVisibleTripFlights(page, route, tripUrl);
+    let flights = await scrapeVisibleTripFlights(page, route, tripUrl);
+
+    if (!flights.length) {
+      await tryFillTripSearchForm(page, route);
+      flights = await scrapeVisibleTripFlights(page, route, tripUrl);
+    }
 
     if (!flights.length) {
       return res.status(404).json({
         success: false,
         error:
-          "Kuro opened Trip.com but could not scrape visible flight rows yet. Try a simpler route like Singapore to Jakarta.",
+          "Kuro opened Trip.com but could not scrape visible flight rows yet. Try Singapore to Jakarta first, then we can tune the selectors for wider routes.",
         tripUrl,
         route,
       });

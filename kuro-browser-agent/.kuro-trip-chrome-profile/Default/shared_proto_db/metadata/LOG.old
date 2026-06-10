@@ -1,2 +1,3 @@
-2026/06/10-08:40:07.265 c97be Creating DB /Users/nd/Desktop/kuro/kuro-browser-agent/.kuro-trip-chrome-profile/Default/shared_proto_db/metadata since it was missing.
-2026/06/10-08:40:07.266 c97be Reusing MANIFEST /Users/nd/Desktop/kuro/kuro-browser-agent/.kuro-trip-chrome-profile/Default/shared_proto_db/metadata/MANIFEST-000001
+2026/06/10-09:12:24.582 d1279 Reusing MANIFEST /Users/nd/Desktop/kuro/kuro-browser-agent/.kuro-trip-chrome-profile/Default/shared_proto_db/metadata/MANIFEST-000001
+2026/06/10-09:12:24.583 d1279 Recovering log #3
+2026/06/10-09:12:24.583 d1279 Reusing old log /Users/nd/Desktop/kuro/kuro-browser-agent/.kuro-trip-chrome-profile/Default/shared_proto_db/metadata/000003.log 

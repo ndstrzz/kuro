@@ -1,6 +1,7 @@
-2026/06/10-08:40:09.294 c97bd Creating DB /Users/nd/Desktop/kuro/kuro-browser-agent/.kuro-trip-chrome-profile/Default/IndexedDB/https_www.trip.com_0.indexeddb.leveldb since it was missing.
-2026/06/10-08:40:09.297 c97bd Reusing MANIFEST /Users/nd/Desktop/kuro/kuro-browser-agent/.kuro-trip-chrome-profile/Default/IndexedDB/https_www.trip.com_0.indexeddb.leveldb/MANIFEST-000001
-2026/06/10-08:40:10.478 c97bd Level-0 table #5: started
-2026/06/10-08:40:10.480 c97bd Level-0 table #5: 1135 bytes OK
-2026/06/10-08:40:10.481 c97bd Delete type=0 #3
-2026/06/10-08:40:10.482 c97af Manual compaction at level-0 from '\x00\x02\x00\x00\x00' @ 72057594037927935 : 1 .. '\x00\x03\x00\x00\x00' @ 0 : 0; will stop at (end)
+2026/06/10-09:12:25.064 d1262 Reusing MANIFEST /Users/nd/Desktop/kuro/kuro-browser-agent/.kuro-trip-chrome-profile/Default/IndexedDB/https_www.trip.com_0.indexeddb.leveldb/MANIFEST-000001
+2026/06/10-09:12:25.064 d1262 Recovering log #4
+2026/06/10-09:12:25.064 d1262 Reusing old log /Users/nd/Desktop/kuro/kuro-browser-agent/.kuro-trip-chrome-profile/Default/IndexedDB/https_www.trip.com_0.indexeddb.leveldb/000004.log 
+2026/06/10-09:12:26.785 d1262 Level-0 table #8: started
+2026/06/10-09:12:26.787 d1262 Level-0 table #8: 70856 bytes OK
+2026/06/10-09:12:26.788 d1262 Delete type=0 #4
+2026/06/10-09:12:26.789 d1262 Manual compaction at level-0 from '\x00\x04\x00\x00\x00' @ 72057594037927935 : 1 .. '\x00\x05\x00\x00\x00' @ 0 : 0; will stop at (end)
